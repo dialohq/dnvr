@@ -86,10 +86,11 @@
     })
     allScripts;
 
-  # What `denver --list` offers — this is what <tab> completes: `up` first,
-  # then the scripts. The completers call `denver --list` at completion time,
-  # so one snippet in a shell config covers every devenv. `state` and
-  # `completions` still work as subcommands but stay out of completion.
+  # What `denver --list` offers — this is what <tab> completes and what
+  # --help shows: `up` first, then the scripts. The completers call
+  # `denver --list` at completion time, so one snippet in a shell config
+  # covers every devenv. `state` and `completions` still work as
+  # subcommands but stay out of both.
   listRows =
     [
       {
@@ -98,19 +99,6 @@
       }
     ]
     ++ scriptRows;
-
-  helpRows =
-    listRows
-    ++ [
-      {
-        name = "state";
-        desc = "runtime state (denver-state passthrough)";
-      }
-      {
-        name = "completions";
-        desc = "print completion code: bash|zsh|fish|nushell";
-      }
-    ];
 
   renderRows = prefix: rows: let
     nameWidth = lib.foldl' lib.max 0 (map (c: lib.stringLength c.name) rows);
@@ -121,7 +109,7 @@
     ["denver: ${name}${titleSuffix}"]
     ++ lib.optional (serviceNames != []) "services: ${lib.concatStringsSep ", " serviceNames}"
     ++ ["" "commands:"]
-    ++ renderRows "denver " helpRows
+    ++ renderRows "denver " listRows
     ++ [
       ""
       "Scripts are also on the shell PATH directly; `denver <script>` and `<script>` are equivalent."
@@ -295,7 +283,7 @@
         }
       ];
   in
-    ["devenv: ${name}${titleSuffix}"]
+    ["denver: ${name}${titleSuffix}"]
     ++ serviceLine
     ++ ["commands:"]
     ++ renderRows "" rows;
@@ -421,7 +409,7 @@ in {
   config.up = upScript;
 
   config.shell = pkgs.mkShell ({
-      name = "devenv-${name}";
+      name = "denver-${name}";
       packages = config.packages ++ servicePackages ++ scriptPkgs ++ [denverState denverCli];
       shellHook = ''
         export DEVENV_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"

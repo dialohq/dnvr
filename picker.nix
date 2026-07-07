@@ -6,13 +6,13 @@
   joined = lib.concatStringsSep " " (map lib.escapeShellArg names);
 in
   pkgs.mkShell {
-    name = "devenv-picker";
+    name = "denver-picker";
     packages = [pkgs.gum];
     shellHook = ''
       # Pick a devenv, write `.envrc`, `direnv allow`, then `exit 0` so nix
       # develop's bash quits and the caller's shell takes over. The caller's
       # direnv prompt hook fires on the next prompt and loads the chosen env.
-      choice=$(${pkgs.gum}/bin/gum choose --header "pick a devenv:" ${joined}) || {
+      choice=$(${pkgs.gum}/bin/gum choose --header "pick an env:" ${joined}) || {
         echo "cancelled — run 'nix develop .#<name>' to skip the picker" >&2
         exit 0
       }
