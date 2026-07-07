@@ -10,7 +10,7 @@ declaring **services** (reusable presets like postgres/clickhouse),
 - `apps.<name>-up` — launch the process group with `nix run .#<name>-up`
 
 Environments are isolated to `.devenv/*` under the repo root, discover each
-other's runtime values (ports, socket dirs) through the bundled `devenv-state`
+other's runtime values (ports, socket dirs) through the bundled `denver-state`
 CLI, and run under a pluggable runner (`mprocs` by default, `process-compose`
 built in).
 
@@ -29,7 +29,7 @@ built in).
       systems = ["x86_64-linux" "aarch64-darwin"];
       imports = [inputs.denver.flakeModule];
 
-      perSystem = {pkgs, presets, devenvState, ...}: {
+      perSystem = {pkgs, presets, denverState, ...}: {
         devenv.backend = {
           description = "postgres + api server";
 
@@ -40,9 +40,9 @@ built in).
 
           processes.api.command = pkgs.writeShellApplication {
             name = "api";
-            runtimeInputs = [devenvState];
+            runtimeInputs = [denverState];
             text = ''
-              PGHOST=$(devenv-state wait pg.socketDir)
+              PGHOST=$(denver-state wait pg.socketDir)
               export PGHOST
               exec my-api-server
             '';
@@ -78,7 +78,7 @@ submodule):
 | `presets` | Built-in service presets (`postgres`, `clickhouse`) plus `denver.extraPresets`. |
 | `runners` | Up-script builders (`mprocs`, `process-compose`) plus `denver.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
-| `devenvState` | The `devenv-state` CLI package, for `runtimeInputs`. |
+| `denverState` | The `denver-state` CLI package, for `runtimeInputs`. |
 
 ## `devenv.<name>` options
 
@@ -88,7 +88,7 @@ submodule):
   Services contribute packages, processes, env, and scripts.
 - `processes.<proc>.command` — derivation (or attrset with `command`) the
   runner orchestrates. Each process gets `DEVENV_RUNTIME_DIR` scoped to its
-  name so `devenv-state set` needs no self-identification.
+  name so `denver-state set` needs no self-identification.
 - `scripts.<name>` — `{text, runtimeInputs?, shell?, description?}` commands
   on the devshell PATH.
 - `env` — exported in the devshell and to every runner process.
@@ -101,14 +101,14 @@ submodule):
 
 Entering a devshell sets `DEVENV_ROOT` (git toplevel) and
 `DEVENV_STATE` (`$DEVENV_ROOT/.devenv`). Services publish and consume
-discovery values through `devenv-state`:
+discovery values through `denver-state`:
 
 ```console
-$ devenv-state set port 5432          # publish to own scope
-$ devenv-state get pg.socketDir       # read another service's value
-$ devenv-state wait pg.socketDir      # block until published (--timeout N)
-$ devenv-state pick-port              # random free TCP port
-$ devenv-state dump                   # list everything published
+$ denver-state set port 5432          # publish to own scope
+$ denver-state get pg.socketDir       # read another service's value
+$ denver-state wait pg.socketDir      # block until published (--timeout N)
+$ denver-state pick-port              # random free TCP port
+$ denver-state dump                   # list everything published
 ```
 
 The runner wipes `$DEVENV_STATE/runtime` on every launch so consumers never
@@ -122,7 +122,7 @@ read stale values.
   `nix develop`) that pops a `gum choose` TUI, writes `.envrc` for the chosen
   devenv, and hands off to direnv.
 - `denver.lib` — read-only handle to the framework
-  (`{mkDevenvs, mkScript, runners, presets, devenvState}`).
+  (`{mkDevenvs, mkScript, runners, presets, denverState}`).
 
 ## Without flake-parts
 

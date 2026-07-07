@@ -123,7 +123,7 @@ in {
     processes."${name}" = {
       command = pkgs.writeShellApplication {
         name = "${name}-ch";
-        runtimeInputs = [config.package pkgs.coreutils (import ../devenv-state.nix {inherit pkgs lib;})];
+        runtimeInputs = [config.package pkgs.coreutils (import ../denver-state.nix {inherit pkgs lib;})];
         text = ''
           set -e
           : "''${DEVENV_ROOT:?DEVENV_ROOT must be set}"
@@ -132,19 +132,19 @@ in {
           # XML reads ports via <… from_env="..."/>, so all we need is to
           # export the right env vars before the exec.
           if [ -z "''${${config.httpPortEnv}:-}" ]; then
-            ${config.httpPortEnv}=$(devenv-state pick-port)
+            ${config.httpPortEnv}=$(denver-state pick-port)
             export ${config.httpPortEnv}
           fi
           if [ -z "''${${config.tcpPortEnv}:-}" ]; then
-            ${config.tcpPortEnv}=$(devenv-state pick-port)
+            ${config.tcpPortEnv}=$(denver-state pick-port)
             export ${config.tcpPortEnv}
           fi
 
           # Publish discovery info so consumers (the tests pane, anything else
-          # that needs CLICKHOUSE_HOST) can `devenv-state wait` for us.
-          devenv-state set httpPort "''$${config.httpPortEnv}"
-          devenv-state set tcpPort  "''$${config.tcpPortEnv}"
-          devenv-state set host     "http://127.0.0.1:''$${config.httpPortEnv}"
+          # that needs CLICKHOUSE_HOST) can `denver-state wait` for us.
+          denver-state set httpPort "''$${config.httpPortEnv}"
+          denver-state set tcpPort  "''$${config.tcpPortEnv}"
+          denver-state set host     "http://127.0.0.1:''$${config.httpPortEnv}"
 
           mkdir -p \
             "$DEVENV_ROOT/${config.dataDir}" \

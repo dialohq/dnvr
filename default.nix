@@ -6,7 +6,7 @@
 }: let
   mkScript = import ./script.nix {inherit pkgs lib;};
 
-  devenvState = import ./devenv-state.nix {inherit pkgs lib;};
+  denverState = import ./denver-state.nix {inherit pkgs lib;};
 
   builtinRunners = {
     mprocs = import ./runners/mprocs.nix {inherit pkgs lib;};
@@ -21,7 +21,7 @@
     result = lib.evalModules {
       modules = [./module.nix] ++ userModules;
       specialArgs = {
-        inherit pkgs mkScript runners presets devenvState;
+        inherit pkgs mkScript runners presets denverState;
       };
     };
   in {
@@ -29,5 +29,5 @@
     config = result.config;
   };
 in {
-  inherit mkDevenvs mkScript runners presets devenvState;
+  inherit mkDevenvs mkScript runners presets denverState;
 }

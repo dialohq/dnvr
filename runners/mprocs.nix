@@ -37,7 +37,7 @@ in
       ${envExports}
       : "''${DEVENV_STATE:?DEVENV_STATE must be set (run via nix develop)}"
       mkdir -p "$DEVENV_STATE/logs" "$DEVENV_STATE/runtime"
-      # Wipe stale runtime/ from a previous launch; consumers `devenv-state
+      # Wipe stale runtime/ from a previous launch; consumers `denver-state
       # wait` for fresh values so a stale `pg-test.port` from yesterday would
       # otherwise silently mislead them.
       ${pkgs.coreutils}/bin/rm -rf "$DEVENV_STATE/runtime"

@@ -7,7 +7,7 @@
 
     # Standalone entry point for non-flake-parts users:
     #   denver.lib.mkDenver { inherit pkgs; }
-    # returns { mkDevenvs, mkScript, runners, presets, devenvState }.
+    # returns { mkDevenvs, mkScript, runners, presets, denverState }.
     lib.mkDenver = import ./.;
   };
 }

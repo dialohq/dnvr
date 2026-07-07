@@ -3,7 +3,7 @@
   lib,
 }:
 pkgs.writeShellApplication {
-  name = "devenv-state";
+  name = "denver-state";
   runtimeInputs = [pkgs.coreutils pkgs.python3];
   text = ''
     # Per-service runtime state directory. Convention:
@@ -14,13 +14,13 @@ pkgs.writeShellApplication {
 
     usage() {
       cat >&2 <<EOF
-    devenv-state — runtime state for denver devenvs
+    denver-state — runtime state for denver devenvs
 
-      devenv-state set <key> <value>          publish to own scope (needs DEVENV_RUNTIME_DIR)
-      devenv-state get <svc>.<key>            read another service's value, fail if missing
-      devenv-state wait <svc>.<key> [--timeout=N]  block until <svc>.<key> exists (default 30s)
-      devenv-state pick-port                  echo a random free TCP port
-      devenv-state dump                       list everything under \$DEVENV_STATE/runtime/
+      denver-state set <key> <value>          publish to own scope (needs DEVENV_RUNTIME_DIR)
+      denver-state get <svc>.<key>            read another service's value, fail if missing
+      denver-state wait <svc>.<key> [--timeout=N]  block until <svc>.<key> exists (default 30s)
+      denver-state pick-port                  echo a random free TCP port
+      denver-state dump                       list everything under \$DEVENV_STATE/runtime/
 
     EOF
       exit 64
@@ -34,7 +34,7 @@ pkgs.writeShellApplication {
     split_ref() {
       local ref="$1"
       if [[ "$ref" != *.* ]]; then
-        echo "devenv-state: expected '<svc>.<key>', got '$ref'" >&2
+        echo "denver-state: expected '<svc>.<key>', got '$ref'" >&2
         exit 2
       fi
       svc="''${ref%%.*}"
@@ -48,7 +48,7 @@ pkgs.writeShellApplication {
     case "$cmd" in
       set)
         [ "$#" -eq 2 ] || usage
-        : "''${DEVENV_RUNTIME_DIR:?devenv-state set must run in a service-scoped wrapper (DEVENV_RUNTIME_DIR unset)}"
+        : "''${DEVENV_RUNTIME_DIR:?denver-state set must run in a service-scoped wrapper (DEVENV_RUNTIME_DIR unset)}"
         mkdir -p "$DEVENV_RUNTIME_DIR"
         # Atomic write: temp + rename, so readers never see a half-written file.
         tmp=$(mktemp -p "$DEVENV_RUNTIME_DIR" ".tmp.$1.XXXXXX")
@@ -61,7 +61,7 @@ pkgs.writeShellApplication {
         split_ref "$1"
         file="$RUNTIME/$svc/$key"
         if [ ! -f "$file" ]; then
-          echo "devenv-state: $1 not published (no $file)" >&2
+          echo "denver-state: $1 not published (no $file)" >&2
           exit 1
         fi
         cat "$file"
@@ -75,9 +75,9 @@ pkgs.writeShellApplication {
           case "$1" in
             --timeout=*) timeout="''${1#--timeout=}"; shift ;;
             --timeout)
-              [ "$#" -ge 2 ] || { echo "devenv-state wait: --timeout needs a value" >&2; exit 2; }
+              [ "$#" -ge 2 ] || { echo "denver-state wait: --timeout needs a value" >&2; exit 2; }
               timeout="$2"; shift 2 ;;
-            *) echo "devenv-state wait: unknown arg $1" >&2; exit 2 ;;
+            *) echo "denver-state wait: unknown arg $1" >&2; exit 2 ;;
           esac
         done
         split_ref "$ref"
@@ -93,16 +93,16 @@ pkgs.writeShellApplication {
         while [ ! -f "$file" ]; do
           now=$(date +%s)
           if [ "$now" -ge "$deadline" ]; then
-            echo "devenv-state: timeout waiting $timeout s for $ref ($file)" >&2
+            echo "denver-state: timeout waiting $timeout s for $ref ($file)" >&2
             exit 1
           fi
           if "$report" && [ "$now" -ge "$next_report" ]; then
             elapsed=$(( now - started ))
             if "$first"; then
-              echo "devenv-state: waiting for $ref ..." >&2
+              echo "denver-state: waiting for $ref ..." >&2
               first=false
             else
-              echo "devenv-state: still waiting for $ref (''${elapsed}s elapsed) ..." >&2
+              echo "denver-state: still waiting for $ref (''${elapsed}s elapsed) ..." >&2
             fi
             next_report=$(( now + 5 ))
           fi
@@ -110,7 +110,7 @@ pkgs.writeShellApplication {
         done
         if "$report" && ! "$first"; then
           elapsed=$(( $(date +%s) - started ))
-          echo "devenv-state: $ref ready (''${elapsed}s)" >&2
+          echo "denver-state: $ref ready (''${elapsed}s)" >&2
         fi
         cat "$file"
         ;;
@@ -138,7 +138,7 @@ pkgs.writeShellApplication {
         ;;
 
       *)
-        echo "devenv-state: unknown subcommand '$cmd'" >&2
+        echo "denver-state: unknown subcommand '$cmd'" >&2
         usage
         ;;
     esac

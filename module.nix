@@ -5,14 +5,14 @@
   mkScript,
   runners,
   presets,
-  devenvState,
+  denverState,
   ...
 }: {
   options = {
     devenv = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submoduleWith {
         modules = [./devenv-module.nix];
-        specialArgs = {inherit pkgs mkScript runners presets devenvState;};
+        specialArgs = {inherit pkgs mkScript runners presets denverState;};
       });
       default = {};
     };

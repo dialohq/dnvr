@@ -57,7 +57,7 @@ in {
     processes."${name}" = {
       command = pkgs.writeShellApplication {
         name = "${name}-pg";
-        runtimeInputs = [config.package pkgs.coreutils pkgs.fblog (import ../devenv-state.nix {inherit pkgs lib;})];
+        runtimeInputs = [config.package pkgs.coreutils pkgs.fblog (import ../denver-state.nix {inherit pkgs lib;})];
         text = ''
           set -e
           : "''${DEVENV_ROOT:?DEVENV_ROOT must be set}"
@@ -68,13 +68,13 @@ in {
           fi
 
           # Publish discovery info for other services (atlas-watch, tests, …)
-          # via devenv-state. Published before postgres is *ready* — consumers
+          # via denver-state. Published before postgres is *ready* — consumers
           # do their own `pg_isready` check; this just answers "where is it?".
-          devenv-state set port "${toString config.port}"
-          devenv-state set socketDir "$DEVENV_ROOT/${config.socketDir}"
-          devenv-state set dataDir "$DEVENV_ROOT/${config.dataDir}"
-          devenv-state set user "${config.superuser}"
-          devenv-state set bootstrapDatabase postgres
+          denver-state set port "${toString config.port}"
+          denver-state set socketDir "$DEVENV_ROOT/${config.socketDir}"
+          denver-state set dataDir "$DEVENV_ROOT/${config.dataDir}"
+          denver-state set user "${config.superuser}"
+          denver-state set bootstrapDatabase postgres
 
           # Native postgres jsonlog → .devenv/logs/<name>.json (what agents
           # tail). We also tail it through fblog to render a pretty stream on

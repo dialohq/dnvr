@@ -52,7 +52,7 @@ in {
         lib = mkOption {
           type = types.raw;
           readOnly = true;
-          description = "Framework handle: `{ mkDevenvs, mkScript, runners, presets, devenvState }`.";
+          description = "Framework handle: `{ mkDevenvs, mkScript, runners, presets, denverState }`.";
         };
       };
 
@@ -61,7 +61,7 @@ in {
           modules = [./devenv-module.nix];
           specialArgs = {
             inherit pkgs;
-            inherit (framework) mkScript runners presets devenvState;
+            inherit (framework) mkScript runners presets denverState;
           };
         });
         default = {};
@@ -70,7 +70,7 @@ in {
 
       config = {
         _module.args = {
-          inherit (framework) mkScript runners presets devenvState;
+          inherit (framework) mkScript runners presets denverState;
         };
 
         denver.lib = framework;

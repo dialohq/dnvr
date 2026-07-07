@@ -6,7 +6,7 @@
   mkScript,
   runners,
   presets,
-  devenvState,
+  denverState,
   ...
 }: let
   inherit (lib) mkOption types;
@@ -32,8 +32,8 @@
     allScripts;
 
   # Wrap each process's command so DEVENV_RUNTIME_DIR points at the per-service
-  # runtime/<procname> directory and devenv-state is on PATH. Lets the inner
-  # command just say `devenv-state set port 5432` without knowing its own name.
+  # runtime/<procname> directory and denver-state is on PATH. Lets the inner
+  # command just say `denver-state set port 5432` without knowing its own name.
   wrapProcess = procName: p: let
     original = p.command or null;
     wrapped =
@@ -41,7 +41,7 @@
       then
         pkgs.writeShellApplication {
           name = "${procName}-scoped";
-          runtimeInputs = [devenvState];
+          runtimeInputs = [denverState];
           text = ''
             : "''${DEVENV_STATE:?DEVENV_STATE must be set}"
             export DEVENV_RUNTIME_DIR="$DEVENV_STATE/runtime/${procName}"
@@ -76,34 +76,184 @@
   in
     lib.optionalString (pad > 0) (lib.fixedWidthString pad " " "");
 
+  titleSuffix = lib.optionalString (config.description != "") " — ${config.description}";
+  serviceNames = lib.attrNames config.services;
+
+  scriptRows =
+    lib.mapAttrsToList (n: s: {
+      name = n;
+      desc = s.description;
+    })
+    allScripts;
+
+  # Subcommands of the `denver` CLI. `denver --list` prints these as
+  # tab-separated name/description lines; the shell completers emitted by
+  # `denver completions <shell>` complete by calling `denver --list` at
+  # completion time, so one snippet in a shell config covers every devenv.
+  commandRows =
+    [
+      {
+        name = "up";
+        desc = "launch process group (${lib.concatStringsSep ", " (lib.attrNames wrappedProcesses)})";
+      }
+    ]
+    ++ scriptRows
+    ++ [
+      {
+        name = "state";
+        desc = "runtime state (denver-state passthrough)";
+      }
+      {
+        name = "completions";
+        desc = "print completion code: bash|zsh|fish|nushell";
+      }
+    ];
+
+  renderRows = prefix: rows: let
+    nameWidth = lib.foldl' lib.max 0 (map (c: lib.stringLength c.name) rows);
+  in
+    map (c: "  ${prefix}${c.name}${padTo (nameWidth + 2) c.name}${c.desc}") rows;
+
+  helpText = lib.concatStringsSep "\n" (
+    ["denver: ${name}${titleSuffix}"]
+    ++ lib.optional (serviceNames != []) "services: ${lib.concatStringsSep ", " serviceNames}"
+    ++ ["" "commands:"]
+    ++ renderRows "denver " commandRows
+    ++ [
+      ""
+      "Scripts are also on the shell PATH directly; `denver <script>` and `<script>` are equivalent."
+      "Completion: add the output of `denver completions <bash|zsh|fish|nushell>` to your shell"
+      "config once; it completes via `denver --list`, so it follows whichever devenv is active."
+    ]
+  );
+
+  listText = lib.concatMapStrings (c: "${c.name}\t${c.desc}\n") commandRows;
+
+  bashCompletion = ''
+    _denver() {
+      local cur
+      cur="''${COMP_WORDS[COMP_CWORD]}"
+      [ "$COMP_CWORD" -eq 1 ] || return 0
+      mapfile -t COMPREPLY < <(compgen -W "$(denver --list 2>/dev/null | cut -f1)" -- "$cur")
+    }
+    complete -F _denver denver
+  '';
+
+  zshCompletion = ''
+    _denver() {
+      local -a lines cmds
+      lines=("''${(@f)$(denver --list 2>/dev/null)}")
+      cmds=("''${lines[@]//$'\t'/:}")
+      _describe -t commands 'denver command' cmds
+    }
+    compdef _denver denver
+  '';
+
+  fishCompletion = ''
+    complete -c denver -f
+    complete -c denver -n __fish_use_subcommand -a '(denver --list 2>/dev/null)'
+  '';
+
+  nuCompletion = ''
+    def "nu-complete denver" [] {
+      if (which denver | is-empty) {
+        return []
+      }
+      ^denver --list | lines | each {|line|
+        let parts = ($line | split row "\t")
+        {
+          value: ($parts | first)
+          description: (if ($parts | length) > 1 { $parts | get 1 } else { "" })
+        }
+      }
+    }
+
+    export extern "denver" [
+      command?: string@"nu-complete denver"
+      ...args: string
+    ]
+  '';
+
+  scriptDispatch = lib.concatMapStrings (n: ''
+    "${n}")
+      shift
+      exec "${n}" "$@"
+      ;;
+  '') (lib.attrNames allScripts);
+
+  denverCli = pkgs.writeShellApplication {
+    name = "denver";
+    runtimeInputs = [upScript denverState] ++ scriptPkgs;
+    text = ''
+      cmd="''${1:-}"
+      case "$cmd" in
+        "" | --help | -h | help)
+          printf '%s\n' ${lib.escapeShellArg helpText}
+          ;;
+        --list)
+          printf '%s' ${lib.escapeShellArg listText}
+          ;;
+        up)
+          shift
+          exec "${name}-up" "$@"
+          ;;
+        state)
+          shift
+          exec denver-state "$@"
+          ;;
+        completions)
+          case "''${2:-}" in
+            bash)
+              printf '%s' ${lib.escapeShellArg bashCompletion}
+              ;;
+            zsh)
+              printf '%s' ${lib.escapeShellArg zshCompletion}
+              ;;
+            fish)
+              printf '%s' ${lib.escapeShellArg fishCompletion}
+              ;;
+            nu | nushell)
+              printf '%s' ${lib.escapeShellArg nuCompletion}
+              ;;
+            *)
+              echo "usage: denver completions <bash|zsh|fish|nushell>" >&2
+              exit 64
+              ;;
+          esac
+          ;;
+      ${scriptDispatch}
+        *)
+          echo "denver: unknown command '$cmd' (try 'denver --help')" >&2
+          exit 64
+          ;;
+      esac
+    '';
+  };
+
   bannerLines = let
-    serviceNames = lib.attrNames config.services;
     serviceLine =
       lib.optional (serviceNames != [])
       "services: ${lib.concatStringsSep ", " serviceNames}";
 
-    cmds =
+    rows =
       [
         {
-          name = "${name}-up";
+          name = "denver up";
           desc = "launch process group";
         }
       ]
-      ++ lib.mapAttrsToList (n: s: {
-        name = n;
-        desc = s.description;
-      })
-      allScripts;
-
-    nameWidth = lib.foldl' lib.max 0 (map (c: lib.stringLength c.name) cmds);
-    fmtCmd = c: "${c.name}${padTo (nameWidth + 2) c.name}${c.desc}";
-
-    titleSuffix = lib.optionalString (config.description != "") " — ${config.description}";
+      ++ scriptRows
+      ++ [
+        {
+          name = "denver --help";
+          desc = "list everything in this shell";
+        }
+      ];
   in
     ["devenv: ${name}${titleSuffix}"]
     ++ serviceLine
     ++ ["commands:"]
-    ++ (map (c: "  ${fmtCmd c}") cmds);
+    ++ renderRows "" rows;
 
   # Stamp in $DEVENV_STATE; only re-print if the stamp is missing or older than
   # 3 days. Otherwise direnv would blast the banner on every cd in / reload.
@@ -227,7 +377,7 @@ in {
 
   config.shell = pkgs.mkShell ({
       name = "devenv-${name}";
-      packages = config.packages ++ servicePackages ++ scriptPkgs ++ [upScript devenvState];
+      packages = config.packages ++ servicePackages ++ scriptPkgs ++ [upScript denverState denverCli];
       shellHook = ''
         export DEVENV_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
         export DEVENV_STATE="$DEVENV_ROOT/.devenv"
