@@ -9,7 +9,7 @@ declaring **services** (reusable presets like postgres/clickhouse),
 - `devShells.<name>` — enter with `nix develop .#<name>`
 - `apps.<name>-up` — launch the process group with `nix run .#<name>-up`
 
-Environments are isolated to `.devenv/*` under the repo root, discover each
+Environments are isolated to `.denver/*` under the repo root, discover each
 other's runtime values (ports, socket dirs) through the bundled `denver-state`
 CLI, and run under a pluggable runner (`mprocs` by default, `process-compose`
 built in).
@@ -90,30 +90,35 @@ Completion files sit in standard `share/` locations and the shellHook exports
   lazily at first `<tab>`, so it picks denver up as soon as direnv loads the env.
 - any zsh/fish/nushell (≥0.96) **started inside** the devshell — they read
   `FPATH`/`XDG_DATA_DIRS` at startup (nushell vendor-autoloads
-  `share/nushell/vendor/autoload/denver.nu`).
+  `share/nushell/vendor/autoload/denver-completions.nu`).
 
-The one case that isn't automatic: a zsh/fish/nushell that was **already
-running** when direnv loaded the env — those shells compute completion paths at
-startup. For nushell, load it venv-style (the shellHook materializes the module
-at a stable path):
+The one case that isn't automatic out of the box: a zsh/fish/nushell that was
+**already running** when direnv loaded the env — those shells computed their
+completion paths at startup. The shellHook materializes the nushell module at a
+stable path (`.denver/denver-completions.nu`), so nushell + direnv users make
+it automatic with a one-time hook next to their direnv integration (string
+hooks run in REPL scope, so they can load overlays):
 
 ```nu
-overlay use .devenv/denver-completions.nu
+$env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {
+  condition: {|| (".denver/denver-completions.nu" | path exists) and ("denver-completions" not-in (overlay list | get name)) }
+  code: "overlay use .denver/denver-completions.nu"
+})
 ```
 
-For zsh/fish (or to make nushell permanent), add one line to your shell config,
-once:
+Ad-hoc alternative, venv-style: `overlay use .denver/denver-completions.nu`.
+
+For zsh/fish, add one line to your shell config, once:
 
 ```console
 $ denver completions zsh   # eval in ~/.zshrc (after compinit)
 $ denver completions fish  # save to ~/.config/fish/completions/denver.fish
-$ denver completions nushell  # save + `source` from config.nu
 ```
 
 All completers call `denver --list` (tab-separated `command<TAB>description`)
 at completion time, so they follow whichever devenv is active and complete
-nothing outside one. `denver <TAB>` lists `up`, every script with its
-description, `state`, and `completions`.
+nothing outside one. `denver <TAB>` lists `up` first, then every script with
+its description (`state` and `completions` work but aren't completed).
 
 ## Module args
 
@@ -147,7 +152,7 @@ submodule):
 ## Runtime contract
 
 Entering a devshell sets `DEVENV_ROOT` (git toplevel) and
-`DEVENV_STATE` (`$DEVENV_ROOT/.devenv`). Services publish and consume
+`DEVENV_STATE` (`$DEVENV_ROOT/.denver`). Services publish and consume
 discovery values through `denver-state`:
 
 ```console

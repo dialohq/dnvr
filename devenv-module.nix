@@ -86,18 +86,21 @@
     })
     allScripts;
 
-  # Subcommands of the `denver` CLI. `denver --list` prints these as
-  # tab-separated name/description lines; the shell completers emitted by
-  # `denver completions <shell>` complete by calling `denver --list` at
-  # completion time, so one snippet in a shell config covers every devenv.
-  commandRows =
+  # What `denver --list` offers — this is what <tab> completes: `up` first,
+  # then the scripts. The completers call `denver --list` at completion time,
+  # so one snippet in a shell config covers every devenv. `state` and
+  # `completions` still work as subcommands but stay out of completion.
+  listRows =
     [
       {
         name = "up";
         desc = "launch process group (${lib.concatStringsSep ", " (lib.attrNames wrappedProcesses)})";
       }
     ]
-    ++ scriptRows
+    ++ scriptRows;
+
+  helpRows =
+    listRows
     ++ [
       {
         name = "state";
@@ -118,16 +121,16 @@
     ["denver: ${name}${titleSuffix}"]
     ++ lib.optional (serviceNames != []) "services: ${lib.concatStringsSep ", " serviceNames}"
     ++ ["" "commands:"]
-    ++ renderRows "denver " commandRows
+    ++ renderRows "denver " helpRows
     ++ [
       ""
       "Scripts are also on the shell PATH directly; `denver <script>` and `<script>` are equivalent."
       "Completion is automatic in shells started inside this env. For an already-running"
-      "nushell: `overlay use .devenv/denver-completions.nu`. Other shells: `denver completions <shell>`."
+      "nushell: `overlay use .denver/denver-completions.nu`. Other shells: `denver completions <shell>`."
     ]
   );
 
-  listText = lib.concatMapStrings (c: "${c.name}\t${c.desc}\n") commandRows;
+  listText = lib.concatMapStrings (c: "${c.name}\t${c.desc}\n") listRows;
 
   bashCompletion = ''
     _denver() {
@@ -144,7 +147,7 @@
       local -a lines cmds
       lines=("''${(@f)$(denver --list 2>/dev/null)}")
       cmds=("''${lines[@]//$'\t'/:}")
-      _describe -t commands 'denver command' cmds
+      _describe -V -t commands 'denver command' cmds
     }
   '';
 
@@ -160,19 +163,22 @@
   '';
 
   # Exported so the file works as a module: nushell vendor-autoloads it in
-  # shells started inside the env, and `overlay use .devenv/denver.nu` loads
-  # it into an already-running REPL (venv activate.nu style).
+  # shells started inside the env, and `overlay use .denver/denver-completions.nu`
+  # loads it into an already-running REPL (venv activate.nu style).
   nuCompletion = ''
     export def "nu-complete denver" [] {
       if (which denver | is-empty) {
         return []
       }
-      ^denver --list | lines | each {|line|
-        let parts = ($line | split row "\t")
-        {
-          value: ($parts | first)
-          description: (if ($parts | length) > 1 { $parts | get 1 } else { "" })
-        }
+      {
+        options: {sort: false}
+        completions: (^denver --list | lines | each {|line|
+          let parts = ($line | split row "\t")
+          {
+            value: ($parts | first)
+            description: (if ($parts | length) > 1 { $parts | get 1 } else { "" })
+          }
+        })
       }
     }
 
@@ -419,7 +425,7 @@ in {
       packages = config.packages ++ servicePackages ++ scriptPkgs ++ [denverState denverCli];
       shellHook = ''
         export DEVENV_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
-        export DEVENV_STATE="$DEVENV_ROOT/.devenv"
+        export DEVENV_STATE="$DEVENV_ROOT/.denver"
         mkdir -p "$DEVENV_STATE"
         export XDG_DATA_DIRS="${denverShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
         export FPATH="${denverShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"

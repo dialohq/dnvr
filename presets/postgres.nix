@@ -18,15 +18,15 @@ in {
     };
     dataDir = mkOption {
       type = types.str;
-      default = ".devenv/${name}";
+      default = ".denver/${name}";
     };
     socketDir = mkOption {
       type = types.str;
-      default = ".devenv/${name}-sockets";
+      default = ".denver/${name}-sockets";
     };
     logDir = mkOption {
       type = types.str;
-      default = ".devenv/logs";
+      default = ".denver/logs";
     };
     superuser = mkOption {
       type = types.str;
@@ -76,7 +76,7 @@ in {
           denver-state set user "${config.superuser}"
           denver-state set bootstrapDatabase postgres
 
-          # Native postgres jsonlog → .devenv/logs/<name>.json (what agents
+          # Native postgres jsonlog → .denver/logs/<name>.json (what agents
           # tail). We also tail it through fblog to render a pretty stream on
           # stdout for the human-facing mprocs pane. Postgres dies with the
           # wrapper via the trap.

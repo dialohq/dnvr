@@ -86,12 +86,12 @@ in {
     };
     dataDir = mkOption {
       type = types.str;
-      default = ".devenv/${name}";
+      default = ".denver/${name}";
       description = "Relative to DEVENV_ROOT.";
     };
     logDir = mkOption {
       type = types.str;
-      default = ".devenv/logs";
+      default = ".denver/logs";
     };
     logLevel = mkOption {
       type = types.enum ["trace" "debug" "information" "warning" "error"];
