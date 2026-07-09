@@ -39,14 +39,14 @@ in
     runtimeInputs = [pkgs.process-compose];
     text = ''
       ${envExports}
-      : "''${DEVENV_STATE:?DEVENV_STATE must be set (run via nix develop)}"
-      mkdir -p "$DEVENV_STATE/logs"
+      : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+      mkdir -p "$DNVR_STATE/logs"
       # Wipe stale runtime/; see comment in runners/mprocs.nix.
-      ${pkgs.coreutils}/bin/rm -rf "$DEVENV_STATE/runtime"
-      mkdir -p "$DEVENV_STATE/runtime"
+      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime"
+      mkdir -p "$DNVR_STATE/runtime"
       __cfg=$(${pkgs.coreutils}/bin/mktemp -t process-compose-XXXXXX.yaml)
       trap '${pkgs.coreutils}/bin/rm -f "$__cfg"' EXIT
-      ${pkgs.gnused}/bin/sed "s|@PC_LOG@|$DEVENV_STATE/logs/process-compose.log|g" ${cfg} > "$__cfg"
+      ${pkgs.gnused}/bin/sed "s|@PC_LOG@|$DNVR_STATE/logs/process-compose.log|g" ${cfg} > "$__cfg"
       ${prerun}
       exec process-compose -f "$__cfg" "$@"
     '';

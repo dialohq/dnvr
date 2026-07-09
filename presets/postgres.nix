@@ -18,15 +18,15 @@ in {
     };
     dataDir = mkOption {
       type = types.str;
-      default = ".denver/${name}";
+      default = ".dnvr/${name}";
     };
     socketDir = mkOption {
       type = types.str;
-      default = ".denver/${name}-sockets";
+      default = ".dnvr/${name}-sockets";
     };
     logDir = mkOption {
       type = types.str;
-      default = ".denver/logs";
+      default = ".dnvr/logs";
     };
     superuser = mkOption {
       type = types.str;
@@ -57,38 +57,38 @@ in {
     processes."${name}" = {
       command = pkgs.writeShellApplication {
         name = "${name}-pg";
-        runtimeInputs = [config.package pkgs.coreutils pkgs.fblog (import ../denver-state.nix {inherit pkgs lib;})];
+        runtimeInputs = [config.package pkgs.coreutils pkgs.fblog (import ../dnvr-state.nix {inherit pkgs lib;})];
         text = ''
           set -e
-          : "''${DEVENV_ROOT:?DEVENV_ROOT must be set}"
-          mkdir -p "$DEVENV_ROOT/${config.socketDir}" "$DEVENV_ROOT/${config.logDir}"
-          if [ ! -d "$DEVENV_ROOT/${config.dataDir}" ]; then
-            echo "[${name}] initdb $DEVENV_ROOT/${config.dataDir} ..."
-            initdb -D "$DEVENV_ROOT/${config.dataDir}" --username=${config.superuser}
+          : "''${DNVR_ROOT:?DNVR_ROOT must be set}"
+          mkdir -p "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
+          if [ ! -d "$DNVR_ROOT/${config.dataDir}" ]; then
+            echo "[${name}] initdb $DNVR_ROOT/${config.dataDir} ..."
+            initdb -D "$DNVR_ROOT/${config.dataDir}" --username=${config.superuser}
           fi
 
           # Publish discovery info for other services (atlas-watch, tests, …)
-          # via denver-state. Published before postgres is *ready* — consumers
+          # via dnvr-state. Published before postgres is *ready* — consumers
           # do their own `pg_isready` check; this just answers "where is it?".
-          denver-state set port "${toString config.port}"
-          denver-state set socketDir "$DEVENV_ROOT/${config.socketDir}"
-          denver-state set dataDir "$DEVENV_ROOT/${config.dataDir}"
-          denver-state set user "${config.superuser}"
-          denver-state set bootstrapDatabase postgres
+          dnvr-state set port "${toString config.port}"
+          dnvr-state set socketDir "$DNVR_ROOT/${config.socketDir}"
+          dnvr-state set dataDir "$DNVR_ROOT/${config.dataDir}"
+          dnvr-state set user "${config.superuser}"
+          dnvr-state set bootstrapDatabase postgres
 
-          # Native postgres jsonlog → .denver/logs/<name>.json (what agents
+          # Native postgres jsonlog → .dnvr/logs/<name>.json (what agents
           # tail). We also tail it through fblog to render a pretty stream on
           # stdout for the human-facing mprocs pane. Postgres dies with the
           # wrapper via the trap.
-          LOG_JSON="$DEVENV_ROOT/${config.logDir}/${name}.json"
+          LOG_JSON="$DNVR_ROOT/${config.logDir}/${name}.json"
           echo "[${name}] starting postgres on port ${toString config.port} ..."
-          postgres -D "$DEVENV_ROOT/${config.dataDir}" \
+          postgres -D "$DNVR_ROOT/${config.dataDir}" \
             -c listen_addresses=127.0.0.1 \
             -c port=${toString config.port} \
-            -c unix_socket_directories="$DEVENV_ROOT/${config.socketDir}" \
+            -c unix_socket_directories="$DNVR_ROOT/${config.socketDir}" \
             -c logging_collector=on \
             -c log_destination=jsonlog \
-            -c log_directory="$DEVENV_ROOT/${config.logDir}" \
+            -c log_directory="$DNVR_ROOT/${config.logDir}" \
             -c log_filename=${lib.escapeShellArg "${name}.log"} \
             -c log_rotation_size=0 \
             -c log_rotation_age=0 \

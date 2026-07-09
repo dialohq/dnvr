@@ -1,13 +1,13 @@
 {
-  description = "denver — declarative dev environments for Nix flakes: services, processes, and scripts as modules, one devShell per environment";
+  description = "dnvr — declarative dev environments for Nix flakes: services, processes, and scripts as modules, one devShell per environment";
 
   outputs = _: {
-    # flake-parts module: import as `inputs.denver.flakeModule`.
+    # flake-parts module: import as `inputs.dnvr.flakeModule`.
     flakeModule = ./flake-module.nix;
 
     # Standalone entry point for non-flake-parts users:
-    #   denver.lib.mkDenver { inherit pkgs; }
-    # returns { mkDevenvs, mkScript, runners, presets, denverState }.
-    lib.mkDenver = import ./.;
+    #   dnvr.lib.mkDnvr { inherit pkgs; }
+    # returns { mkEnvs, mkScript, runners, presets, dnvrState }.
+    lib.mkDnvr = import ./.;
   };
 }

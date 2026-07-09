@@ -35,19 +35,19 @@ in
     runtimeInputs = [pkgs.mprocs];
     text = ''
       ${envExports}
-      : "''${DEVENV_STATE:?DEVENV_STATE must be set (run via nix develop)}"
-      mkdir -p "$DEVENV_STATE/logs" "$DEVENV_STATE/runtime"
-      # Wipe stale runtime/ from a previous launch; consumers `denver-state
+      : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+      mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
+      # Wipe stale runtime/ from a previous launch; consumers `dnvr-state
       # wait` for fresh values so a stale `pg-test.port` from yesterday would
       # otherwise silently mislead them.
-      ${pkgs.coreutils}/bin/rm -rf "$DEVENV_STATE/runtime"
-      mkdir -p "$DEVENV_STATE/runtime"
+      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime"
+      mkdir -p "$DNVR_STATE/runtime"
       ${prerun}
       # mprocs hardcodes its own diagnostic log to `mprocs.log` in the cwd
       # (flexi_logger FileSpec::default; no config/env override), so run it
       # from the logs dir to keep it out of the project root. Every process
-      # sets its own cwd via $DEVENV_ROOT, so mprocs' cwd doesn't affect them.
-      cd "$DEVENV_STATE/logs"
+      # sets its own cwd via $DNVR_ROOT, so mprocs' cwd doesn't affect them.
+      cd "$DNVR_STATE/logs"
       exec mprocs --config ${cfg} "$@"
     '';
   }

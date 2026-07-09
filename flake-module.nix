@@ -14,10 +14,10 @@ in {
     }: let
       framework = import ./. {
         inherit pkgs lib;
-        inherit (config.denver) extraRunners extraPresets;
+        inherit (config.dnvr) extraRunners extraPresets;
       };
     in {
-      options.denver = {
+      options.dnvr = {
         extraRunners = mkOption {
           type = types.attrsOf (types.functionTo types.package);
           default = {};
@@ -33,14 +33,14 @@ in {
         exposeApps = mkOption {
           type = types.bool;
           default = true;
-          description = "Whether to wire each devenv's up-script as `apps.<name>-up`.";
+          description = "Whether to wire each env's up-script as `apps.<name>-up`.";
         };
 
         picker = {
           enable = mkOption {
             type = types.bool;
             default = false;
-            description = "Add a picker devshell: `nix develop .#<picker.name>` pops a `gum choose` TUI and eval's the chosen devenv's env in place. Single nix develop invocation, no re-exec.";
+            description = "Add a picker devshell: `nix develop .#<picker.name>` pops a `gum choose` TUI and eval's the chosen env in place. Single nix develop invocation, no re-exec.";
           };
           name = mkOption {
             type = types.str;
@@ -52,47 +52,47 @@ in {
         lib = mkOption {
           type = types.raw;
           readOnly = true;
-          description = "Framework handle: `{ mkDevenvs, mkScript, runners, presets, denverState }`.";
+          description = "Framework handle: `{ mkEnvs, mkScript, runners, presets, dnvrState }`.";
         };
-      };
 
-      options.devenv = mkOption {
-        type = types.attrsOf (types.submoduleWith {
-          modules = [./devenv-module.nix];
-          specialArgs = {
-            inherit pkgs;
-            inherit (framework) mkScript runners presets denverState;
-          };
-        });
-        default = {};
-        description = "Devenvs declared modularly; one devShell per name.";
+        envs = mkOption {
+          type = types.attrsOf (types.submoduleWith {
+            modules = [./env-module.nix];
+            specialArgs = {
+              inherit pkgs;
+              inherit (framework) mkScript runners presets dnvrState;
+            };
+          });
+          default = {};
+          description = "Envs declared modularly; one devShell per name.";
+        };
       };
 
       config = {
         _module.args = {
-          inherit (framework) mkScript runners presets denverState;
+          inherit (framework) mkScript runners presets dnvrState;
         };
 
-        denver.lib = framework;
+        dnvr.lib = framework;
 
         devShells =
-          (lib.mapAttrs (_: c: c.shell) config.devenv)
-          // (lib.optionalAttrs config.denver.picker.enable {
-            "${config.denver.picker.name}" = import ./picker.nix {
+          (lib.mapAttrs (_: c: c.shell) config.dnvr.envs)
+          // (lib.optionalAttrs config.dnvr.picker.enable {
+            "${config.dnvr.picker.name}" = import ./picker.nix {
               inherit pkgs lib;
-              names = lib.attrNames config.devenv;
+              names = lib.attrNames config.dnvr.envs;
             };
           });
 
-        apps = lib.optionalAttrs config.denver.exposeApps (
-          lib.mapAttrs' (devenvName: c: {
-            name = "${devenvName}-up";
+        apps = lib.optionalAttrs config.dnvr.exposeApps (
+          lib.mapAttrs' (envName: c: {
+            name = "${envName}-up";
             value = {
               type = "app";
-              program = "${c.up}/bin/${devenvName}-up";
+              program = "${c.up}/bin/${envName}-up";
             };
           })
-          config.devenv
+          config.dnvr.envs
         );
       };
     });

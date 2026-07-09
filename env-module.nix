@@ -6,7 +6,7 @@
   mkScript,
   runners,
   presets,
-  denverState,
+  dnvrState,
   ...
 }: let
   inherit (lib) mkOption types;
@@ -31,9 +31,9 @@
       })
     allScripts;
 
-  # Wrap each process's command so DEVENV_RUNTIME_DIR points at the per-service
-  # runtime/<procname> directory and denver-state is on PATH. Lets the inner
-  # command just say `denver-state set port 5432` without knowing its own name.
+  # Wrap each process's command so DNVR_RUNTIME_DIR points at the per-service
+  # runtime/<procname> directory and dnvr-state is on PATH. Lets the inner
+  # command just say `dnvr-state set port 5432` without knowing its own name.
   wrapProcess = procName: p: let
     original = p.command or null;
     wrapped =
@@ -41,11 +41,11 @@
       then
         pkgs.writeShellApplication {
           name = "${procName}-scoped";
-          runtimeInputs = [denverState];
+          runtimeInputs = [dnvrState];
           text = ''
-            : "''${DEVENV_STATE:?DEVENV_STATE must be set}"
-            export DEVENV_RUNTIME_DIR="$DEVENV_STATE/runtime/${procName}"
-            mkdir -p "$DEVENV_RUNTIME_DIR"
+            : "''${DNVR_STATE:?DNVR_STATE must be set}"
+            export DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
+            mkdir -p "$DNVR_RUNTIME_DIR"
             exec ${lib.getExe original} "$@"
           '';
         }
@@ -86,10 +86,10 @@
     })
     allScripts;
 
-  # What `denver --list` offers — this is what <tab> completes and what
+  # What `dnvr --list` offers — this is what <tab> completes and what
   # --help shows: `up` first, then the scripts. The completers call
-  # `denver --list` at completion time, so one snippet in a shell config
-  # covers every devenv. `state` and `completions` still work as
+  # `dnvr --list` at completion time, so one snippet in a shell config
+  # covers every env. `state` and `completions` still work as
   # subcommands but stay out of both.
   listRows =
     [
@@ -106,61 +106,61 @@
     map (c: "  ${prefix}${c.name}${padTo (nameWidth + 2) c.name}${c.desc}") rows;
 
   helpText = lib.concatStringsSep "\n" (
-    ["denver: ${name}${titleSuffix}"]
+    ["dnvr: ${name}${titleSuffix}"]
     ++ lib.optional (serviceNames != []) "services: ${lib.concatStringsSep ", " serviceNames}"
     ++ ["" "commands:"]
-    ++ renderRows "denver " listRows
+    ++ renderRows "dnvr " listRows
     ++ [
       ""
-      "Scripts are also on the shell PATH directly; `denver <script>` and `<script>` are equivalent."
+      "Scripts are also on the shell PATH directly; `dnvr <script>` and `<script>` are equivalent."
       "Completion is automatic in shells started inside this env. For an already-running"
-      "nushell: `overlay use .denver/denver-completions.nu`. Other shells: `denver completions <shell>`."
+      "nushell: `overlay use .dnvr/dnvr-completions.nu`. Other shells: `dnvr completions <shell>`."
     ]
   );
 
   listText = lib.concatMapStrings (c: "${c.name}\t${c.desc}\n") listRows;
 
   bashCompletion = ''
-    _denver() {
+    _dnvr() {
       local cur
       cur="''${COMP_WORDS[COMP_CWORD]}"
       [ "$COMP_CWORD" -eq 1 ] || return 0
-      mapfile -t COMPREPLY < <(compgen -W "$(denver --list 2>/dev/null | cut -f1)" -- "$cur")
+      mapfile -t COMPREPLY < <(compgen -W "$(dnvr --list 2>/dev/null | cut -f1)" -- "$cur")
     }
-    complete -F _denver denver
+    complete -F _dnvr dnvr
   '';
 
   zshFunction = ''
-    _denver() {
+    _dnvr() {
       local -a lines cmds
-      lines=("''${(@f)$(denver --list 2>/dev/null)}")
+      lines=("''${(@f)$(dnvr --list 2>/dev/null)}")
       cmds=("''${lines[@]//$'\t'/:}")
-      _describe -V -t commands 'denver command' cmds
+      _describe -V -t commands 'dnvr command' cmds
     }
   '';
 
-  # For eval'ing into a live shell (`denver completions zsh`).
-  zshCompletion = zshFunction + "compdef _denver denver\n";
+  # For eval'ing into a live shell (`dnvr completions zsh`).
+  zshCompletion = zshFunction + "compdef _dnvr dnvr\n";
 
-  # Autoloadable fpath file (share/zsh/site-functions/_denver).
-  zshCompletionFile = "#compdef denver\n" + zshFunction + "_denver \"$@\"\n";
+  # Autoloadable fpath file (share/zsh/site-functions/_dnvr).
+  zshCompletionFile = "#compdef dnvr\n" + zshFunction + "_dnvr \"$@\"\n";
 
   fishCompletion = ''
-    complete -c denver -f
-    complete -c denver -n __fish_use_subcommand -a '(denver --list 2>/dev/null)'
+    complete -c dnvr -f
+    complete -c dnvr -n __fish_use_subcommand -a '(dnvr --list 2>/dev/null)'
   '';
 
   # Exported so the file works as a module: nushell vendor-autoloads it in
-  # shells started inside the env, and `overlay use .denver/denver-completions.nu`
+  # shells started inside the env, and `overlay use .dnvr/dnvr-completions.nu`
   # loads it into an already-running REPL (venv activate.nu style).
   nuCompletion = ''
-    export def "nu-complete denver" [] {
-      if (which denver | is-empty) {
+    export def "nu-complete dnvr" [] {
+      if (which dnvr | is-empty) {
         return []
       }
       {
         options: {sort: false}
-        completions: (^denver --list | lines | each {|line|
+        completions: (^dnvr --list | lines | each {|line|
           let parts = ($line | split row "\t")
           {
             value: ($parts | first)
@@ -170,8 +170,8 @@
       }
     }
 
-    export extern "denver" [
-      command?: string@"nu-complete denver"
+    export extern "dnvr" [
+      command?: string@"nu-complete dnvr"
       ...args: string
     ]
   '';
@@ -181,28 +181,28 @@
   # XDG_DATA_DIRS lazily at first <tab>, so it works even when the env arrives
   # via direnv; fish, zsh, and nushell (≥0.96 vendor autoload) read these
   # paths at shell startup, covering any shell launched inside the devshell.
-  denverShare = pkgs.linkFarm "denver-completions" [
+  dnvrShare = pkgs.linkFarm "dnvr-completions" [
     {
-      name = "share/bash-completion/completions/denver";
-      path = pkgs.writeText "denver.bash" bashCompletion;
+      name = "share/bash-completion/completions/dnvr";
+      path = pkgs.writeText "dnvr.bash" bashCompletion;
     }
     {
-      name = "share/zsh/site-functions/_denver";
-      path = pkgs.writeText "_denver" zshCompletionFile;
+      name = "share/zsh/site-functions/_dnvr";
+      path = pkgs.writeText "_dnvr" zshCompletionFile;
     }
     {
-      name = "share/fish/vendor_completions.d/denver.fish";
-      path = pkgs.writeText "denver.fish" fishCompletion;
+      name = "share/fish/vendor_completions.d/dnvr.fish";
+      path = pkgs.writeText "dnvr.fish" fishCompletion;
     }
     {
-      name = "share/nushell/vendor/autoload/denver-completions.nu";
+      name = "share/nushell/vendor/autoload/dnvr-completions.nu";
       path = nuCompletionFile;
     }
   ];
 
-  # Named so the module name differs from the `denver` extern — nushell
-  # forbids `export extern "denver"` from a module itself named `denver`.
-  nuCompletionFile = pkgs.writeText "denver-completions.nu" nuCompletion;
+  # Named so the module name differs from the `dnvr` extern — nushell
+  # forbids `export extern "dnvr"` from a module itself named `dnvr`.
+  nuCompletionFile = pkgs.writeText "dnvr-completions.nu" nuCompletion;
 
   scriptDispatch = lib.concatMapStrings (n: ''
     "${n}")
@@ -211,9 +211,9 @@
       ;;
   '') (lib.attrNames allScripts);
 
-  denverCli = pkgs.writeShellApplication {
-    name = "denver";
-    runtimeInputs = [upScript denverState] ++ scriptPkgs;
+  dnvrCli = pkgs.writeShellApplication {
+    name = "dnvr";
+    runtimeInputs = [upScript dnvrState] ++ scriptPkgs;
     # The help/list/completions bodies are single-quoted on purpose (printf
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
     excludeShellChecks = ["SC2016"];
@@ -232,7 +232,7 @@
           ;;
         state)
           shift
-          exec denver-state "$@"
+          exec dnvr-state "$@"
           ;;
         completions)
           case "''${2:-}" in
@@ -249,14 +249,14 @@
               printf '%s' ${lib.escapeShellArg nuCompletion}
               ;;
             *)
-              echo "usage: denver completions <bash|zsh|fish|nushell>" >&2
+              echo "usage: dnvr completions <bash|zsh|fish|nushell>" >&2
               exit 64
               ;;
           esac
           ;;
       ${scriptDispatch}
         *)
-          echo "denver: unknown command '$cmd' (try 'denver --help')" >&2
+          echo "dnvr: unknown command '$cmd' (try 'dnvr --help')" >&2
           exit 64
           ;;
       esac
@@ -271,28 +271,28 @@
     rows =
       [
         {
-          name = "denver up";
+          name = "dnvr up";
           desc = "launch process group";
         }
       ]
       ++ scriptRows
       ++ [
         {
-          name = "denver --help";
+          name = "dnvr --help";
           desc = "list everything in this shell";
         }
       ];
   in
-    ["denver: ${name}${titleSuffix}"]
+    ["dnvr: ${name}${titleSuffix}"]
     ++ serviceLine
     ++ ["commands:"]
     ++ renderRows "" rows;
 
-  # Stamp in $DEVENV_STATE; only re-print if the stamp is missing or older than
+  # Stamp in $DNVR_STATE; only re-print if the stamp is missing or older than
   # 3 days. Otherwise direnv would blast the banner on every cd in / reload.
   bannerScript = ''
-    __devenv_banner_stamp="$DEVENV_STATE/.banner-shown-${name}"
-    if [ ! -f "$__devenv_banner_stamp" ] || [ -z "$(${pkgs.findutils}/bin/find "$__devenv_banner_stamp" -newermt '3 days ago' 2>/dev/null)" ]; then
+    __dnvr_banner_stamp="$DNVR_STATE/.banner-shown-${name}"
+    if [ ! -f "$__dnvr_banner_stamp" ] || [ -z "$(${pkgs.findutils}/bin/find "$__dnvr_banner_stamp" -newermt '3 days ago' 2>/dev/null)" ]; then
       ${pkgs.gum}/bin/gum style \
         --border rounded \
         --border-foreground 6 \
@@ -300,9 +300,9 @@
         --padding "0 1" \
         --margin "1 0 0 0" \
         ${lib.escapeShellArgs bannerLines}
-      ${pkgs.coreutils}/bin/touch "$__devenv_banner_stamp"
+      ${pkgs.coreutils}/bin/touch "$__dnvr_banner_stamp"
     fi
-    unset __devenv_banner_stamp
+    unset __dnvr_banner_stamp
   '';
 
 in {
@@ -370,7 +370,7 @@ in {
       default = "";
       description = ''
         Shell code executed inside the up-script before the runner exec.
-        Has DEVENV_ROOT and DEVENV_STATE available. Anything `export`ed here
+        Has DNVR_ROOT and DNVR_STATE available. Anything `export`ed here
         flows into the runner, which propagates to every process. Use this
         for dynamic-port picking and similar runtime env setup.
       '';
@@ -409,17 +409,17 @@ in {
   config.up = upScript;
 
   config.shell = pkgs.mkShell ({
-      name = "denver-${name}";
-      packages = config.packages ++ servicePackages ++ scriptPkgs ++ [denverState denverCli];
+      name = "dnvr-${name}";
+      packages = config.packages ++ servicePackages ++ scriptPkgs ++ [dnvrState dnvrCli];
       shellHook = ''
-        export DEVENV_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
-        export DEVENV_STATE="$DEVENV_ROOT/.denver"
-        mkdir -p "$DEVENV_STATE"
-        export XDG_DATA_DIRS="${denverShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-        export FPATH="${denverShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"
-        ${pkgs.coreutils}/bin/install -m 0644 ${nuCompletionFile} "$DEVENV_STATE/denver-completions.nu"
+        export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
+        export DNVR_STATE="$DNVR_ROOT/.dnvr"
+        mkdir -p "$DNVR_STATE"
+        export XDG_DATA_DIRS="${dnvrShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
+        export FPATH="${dnvrShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"
+        ${pkgs.coreutils}/bin/install -m 0644 ${nuCompletionFile} "$DNVR_STATE/dnvr-completions.nu"
         if [ -n "''${BASH_VERSION:-}" ] && [[ $- == *i* ]]; then
-          eval "$(denver completions bash)"
+          eval "$(dnvr completions bash)"
         fi
         ${bannerScript}
         ${config.shellHook}

@@ -3,38 +3,38 @@
   lib,
 }:
 pkgs.writeShellApplication {
-  name = "denver-state";
+  name = "dnvr-state";
   runtimeInputs = [pkgs.coreutils pkgs.python3];
   text = ''
     # Per-service runtime state directory. Convention:
-    #   $DEVENV_STATE/runtime/<service>/<key>
-    # Each service's wrapper has DEVENV_RUNTIME_DIR pointing at its own dir
-    # (set by devenv-module.nix), so `set` and `get` (own-scope) need no
+    #   $DNVR_STATE/runtime/<service>/<key>
+    # Each service's wrapper has DNVR_RUNTIME_DIR pointing at its own dir
+    # (set by env-module.nix), so `set` and `get` (own-scope) need no
     # service name. Cross-service reads use `get <svc>.<key>`.
 
     usage() {
       cat >&2 <<EOF
-    denver-state — runtime state for denver devenvs
+    dnvr-state — runtime state for dnvr envs
 
-      denver-state set <key> <value>          publish to own scope (needs DEVENV_RUNTIME_DIR)
-      denver-state get <svc>.<key>            read another service's value, fail if missing
-      denver-state wait <svc>.<key> [--timeout=N]  block until <svc>.<key> exists (default 30s)
-      denver-state pick-port                  echo a random free TCP port
-      denver-state dump                       list everything under \$DEVENV_STATE/runtime/
+      dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
+      dnvr-state get <svc>.<key>            read another service's value, fail if missing
+      dnvr-state wait <svc>.<key> [--timeout=N]  block until <svc>.<key> exists (default 30s)
+      dnvr-state pick-port                  echo a random free TCP port
+      dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
 
     EOF
       exit 64
     }
 
-    : "''${DEVENV_STATE:?DEVENV_STATE must be set (run via nix develop)}"
-    RUNTIME="$DEVENV_STATE/runtime"
+    : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+    RUNTIME="$DNVR_STATE/runtime"
 
     # Split "svc.key" → svc, key. Service names may contain dashes; keys must
     # not contain dots.
     split_ref() {
       local ref="$1"
       if [[ "$ref" != *.* ]]; then
-        echo "denver-state: expected '<svc>.<key>', got '$ref'" >&2
+        echo "dnvr-state: expected '<svc>.<key>', got '$ref'" >&2
         exit 2
       fi
       svc="''${ref%%.*}"
@@ -48,12 +48,12 @@ pkgs.writeShellApplication {
     case "$cmd" in
       set)
         [ "$#" -eq 2 ] || usage
-        : "''${DEVENV_RUNTIME_DIR:?denver-state set must run in a service-scoped wrapper (DEVENV_RUNTIME_DIR unset)}"
-        mkdir -p "$DEVENV_RUNTIME_DIR"
+        : "''${DNVR_RUNTIME_DIR:?dnvr-state set must run in a service-scoped wrapper (DNVR_RUNTIME_DIR unset)}"
+        mkdir -p "$DNVR_RUNTIME_DIR"
         # Atomic write: temp + rename, so readers never see a half-written file.
-        tmp=$(mktemp -p "$DEVENV_RUNTIME_DIR" ".tmp.$1.XXXXXX")
+        tmp=$(mktemp -p "$DNVR_RUNTIME_DIR" ".tmp.$1.XXXXXX")
         printf '%s\n' "$2" > "$tmp"
-        mv "$tmp" "$DEVENV_RUNTIME_DIR/$1"
+        mv "$tmp" "$DNVR_RUNTIME_DIR/$1"
         ;;
 
       get)
@@ -61,7 +61,7 @@ pkgs.writeShellApplication {
         split_ref "$1"
         file="$RUNTIME/$svc/$key"
         if [ ! -f "$file" ]; then
-          echo "denver-state: $1 not published (no $file)" >&2
+          echo "dnvr-state: $1 not published (no $file)" >&2
           exit 1
         fi
         cat "$file"
@@ -75,9 +75,9 @@ pkgs.writeShellApplication {
           case "$1" in
             --timeout=*) timeout="''${1#--timeout=}"; shift ;;
             --timeout)
-              [ "$#" -ge 2 ] || { echo "denver-state wait: --timeout needs a value" >&2; exit 2; }
+              [ "$#" -ge 2 ] || { echo "dnvr-state wait: --timeout needs a value" >&2; exit 2; }
               timeout="$2"; shift 2 ;;
-            *) echo "denver-state wait: unknown arg $1" >&2; exit 2 ;;
+            *) echo "dnvr-state wait: unknown arg $1" >&2; exit 2 ;;
           esac
         done
         split_ref "$ref"
@@ -93,16 +93,16 @@ pkgs.writeShellApplication {
         while [ ! -f "$file" ]; do
           now=$(date +%s)
           if [ "$now" -ge "$deadline" ]; then
-            echo "denver-state: timeout waiting $timeout s for $ref ($file)" >&2
+            echo "dnvr-state: timeout waiting $timeout s for $ref ($file)" >&2
             exit 1
           fi
           if "$report" && [ "$now" -ge "$next_report" ]; then
             elapsed=$(( now - started ))
             if "$first"; then
-              echo "denver-state: waiting for $ref ..." >&2
+              echo "dnvr-state: waiting for $ref ..." >&2
               first=false
             else
-              echo "denver-state: still waiting for $ref (''${elapsed}s elapsed) ..." >&2
+              echo "dnvr-state: still waiting for $ref (''${elapsed}s elapsed) ..." >&2
             fi
             next_report=$(( now + 5 ))
           fi
@@ -110,7 +110,7 @@ pkgs.writeShellApplication {
         done
         if "$report" && ! "$first"; then
           elapsed=$(( $(date +%s) - started ))
-          echo "denver-state: $ref ready (''${elapsed}s)" >&2
+          echo "dnvr-state: $ref ready (''${elapsed}s)" >&2
         fi
         cat "$file"
         ;;
@@ -138,7 +138,7 @@ pkgs.writeShellApplication {
         ;;
 
       *)
-        echo "denver-state: unknown subcommand '$cmd'" >&2
+        echo "dnvr-state: unknown subcommand '$cmd'" >&2
         usage
         ;;
     esac

@@ -12,7 +12,7 @@
   # Ports are resolved by clickhouse at startup via `from_env`. Default to
   # per-service env-var names; callers can override `httpPortEnv`/`tcpPortEnv`
   # to point at shared names like `CH_HTTP_PORT` for dynamic-port setups via
-  # the devenv's `prerun`.
+  # the env's `prerun`.
   configXml = pkgs.writeText "${name}-clickhouse.xml" ''
     <?xml version="1.0"?>
     <clickhouse>
@@ -86,12 +86,12 @@ in {
     };
     dataDir = mkOption {
       type = types.str;
-      default = ".denver/${name}";
-      description = "Relative to DEVENV_ROOT.";
+      default = ".dnvr/${name}";
+      description = "Relative to DNVR_ROOT.";
     };
     logDir = mkOption {
       type = types.str;
-      default = ".denver/logs";
+      default = ".dnvr/logs";
     };
     logLevel = mkOption {
       type = types.enum ["trace" "debug" "information" "warning" "error"];
@@ -107,8 +107,8 @@ in {
     packages = [config.package];
 
     # Set the port env vars statically when httpPort/tcpPort have values. The
-    # devenv-level `prerun` can override these by `export`ing the same names —
-    # process env wins over the devenv env map.
+    # env-level `prerun` can override these by `export`ing the same names —
+    # process env wins over the env-level env map.
     env =
       (lib.optionalAttrs (config.httpPort != null) {
         "${config.httpPortEnv}" = toString config.httpPort;
@@ -123,37 +123,37 @@ in {
     processes."${name}" = {
       command = pkgs.writeShellApplication {
         name = "${name}-ch";
-        runtimeInputs = [config.package pkgs.coreutils (import ../denver-state.nix {inherit pkgs lib;})];
+        runtimeInputs = [config.package pkgs.coreutils (import ../dnvr-state.nix {inherit pkgs lib;})];
         text = ''
           set -e
-          : "''${DEVENV_ROOT:?DEVENV_ROOT must be set}"
+          : "''${DNVR_ROOT:?DNVR_ROOT must be set}"
 
           # If a static port wasn't configured, pick one now. The clickhouse
           # XML reads ports via <… from_env="..."/>, so all we need is to
           # export the right env vars before the exec.
           if [ -z "''${${config.httpPortEnv}:-}" ]; then
-            ${config.httpPortEnv}=$(denver-state pick-port)
+            ${config.httpPortEnv}=$(dnvr-state pick-port)
             export ${config.httpPortEnv}
           fi
           if [ -z "''${${config.tcpPortEnv}:-}" ]; then
-            ${config.tcpPortEnv}=$(denver-state pick-port)
+            ${config.tcpPortEnv}=$(dnvr-state pick-port)
             export ${config.tcpPortEnv}
           fi
 
           # Publish discovery info so consumers (the tests pane, anything else
-          # that needs CLICKHOUSE_HOST) can `denver-state wait` for us.
-          denver-state set httpPort "''$${config.httpPortEnv}"
-          denver-state set tcpPort  "''$${config.tcpPortEnv}"
-          denver-state set host     "http://127.0.0.1:''$${config.httpPortEnv}"
+          # that needs CLICKHOUSE_HOST) can `dnvr-state wait` for us.
+          dnvr-state set httpPort "''$${config.httpPortEnv}"
+          dnvr-state set tcpPort  "''$${config.tcpPortEnv}"
+          dnvr-state set host     "http://127.0.0.1:''$${config.httpPortEnv}"
 
           mkdir -p \
-            "$DEVENV_ROOT/${config.dataDir}" \
-            "$DEVENV_ROOT/${config.dataDir}/tmp" \
-            "$DEVENV_ROOT/${config.dataDir}/user_files" \
-            "$DEVENV_ROOT/${config.dataDir}/format_schemas" \
-            "$DEVENV_ROOT/${config.logDir}"
-          # Paths in the XML are relative; cd to DEVENV_ROOT so they resolve.
-          cd "$DEVENV_ROOT"
+            "$DNVR_ROOT/${config.dataDir}" \
+            "$DNVR_ROOT/${config.dataDir}/tmp" \
+            "$DNVR_ROOT/${config.dataDir}/user_files" \
+            "$DNVR_ROOT/${config.dataDir}/format_schemas" \
+            "$DNVR_ROOT/${config.logDir}"
+          # Paths in the XML are relative; cd to DNVR_ROOT so they resolve.
+          cd "$DNVR_ROOT"
           # Native dual output: <log>file</log> + <console>true</console> writes
           # to both the log file (for agents) and stderr (for mprocs panes).
           exec clickhouse-server --config-file=${configXml}
