@@ -9,6 +9,16 @@
   inherit (lib) mkOption types;
 in {
   options = {
+    database = mkOption {
+      type = types.str;
+      description = ''
+        Database to create (if missing) once the server is up. Required.
+        Published as `database` only after it exists and the server accepts
+        connections, so `dnvr://<name>/database` doubles as a readiness
+        signal for consumers.
+      '';
+    };
+
     port = mkOption {
       type = types.port;
       default = 5432;
@@ -52,6 +62,7 @@ in {
     env = {
       "PG_${upper}_PORT" = toString config.port;
       "PG_${upper}_SOCKET_DIR" = config.socketDir;
+      "PG_${upper}_DATABASE" = config.database;
       "PG_${upper}_LOG_JSON" = "${config.logDir}/${name}.json";
     };
 
@@ -69,7 +80,8 @@ in {
 
         # Publish discovery info for other processes (atlas-watch, tests, …)
         # via dnvr-state. Published before postgres is *ready* — consumers
-        # do their own `pg_isready` check; this just answers "where is it?".
+        # that only need "where is it?" read these; `database` is published
+        # separately below, only once the server accepts connections.
         dnvr-state set port "${toString config.port}"
         dnvr-state set socketDir "$DNVR_ROOT/${config.socketDir}"
         dnvr-state set dataDir "$DNVR_ROOT/${config.dataDir}"
@@ -117,6 +129,25 @@ in {
           echo "[${name}] timed out waiting for $LOG_JSON" >&2
           exit 1
         fi
+
+        # Wait until the server accepts connections, ensure the configured
+        # database exists, then publish it. Consumers holding
+        # `dnvr://<name>/database` refs unblock here — after the DB is
+        # actually usable, not merely after the postmaster forked.
+        PGARGS=(-h "$DNVR_ROOT/${config.socketDir}" -p ${toString config.port} -U ${config.superuser})
+        until pg_isready -q "''${PGARGS[@]}"; do
+          if ! kill -0 $PG_PID 2>/dev/null; then
+            echo "[${name}] postgres exited before becoming ready" >&2
+            exit 1
+          fi
+          sleep 0.1
+        done
+        if [ -z "$(psql "''${PGARGS[@]}" -d postgres -tAc \
+            "SELECT 1 FROM pg_database WHERE datname = '${config.database}'")" ]; then
+          echo "[${name}] creating database ${config.database} ..."
+          createdb "''${PGARGS[@]}" ${lib.escapeShellArg config.database}
+        fi
+        dnvr-state set database ${lib.escapeShellArg config.database}
 
         # fblog renders structured logs. Postgres jsonlog uses `timestamp`
         # (in fblog's defaults) and `message` (also default), but `level` →

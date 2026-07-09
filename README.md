@@ -37,10 +37,14 @@ dependency graph — and run under a pluggable runner (`mprocs` by default,
           processes.pg = {
             imports = [presets.postgres];
             package = pkgs.postgresql_17;
+            database = "app";
           };
 
           processes.api = {
-            env.PGHOST = "dnvr://pg/socketDir"; # blocks until pg publishes it
+            env = {
+              PGHOST = "dnvr://pg/socketDir"; # blocks until pg publishes it
+              PGDATABASE = "dnvr://pg/database"; # published once the DB is usable
+            };
             command = "my-api-server";
           };
 
