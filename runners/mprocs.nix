@@ -15,9 +15,11 @@
     else cmd;
 
   procs =
-    lib.mapAttrs (n: p: {
-      shell = resolveCommand n p;
-    })
+    lib.mapAttrs (n: p:
+      (p.runner_settings.mprocs or {})
+      // {
+        shell = resolveCommand n p;
+      })
     processes;
 
   # The proc shells are all static nix-store paths, so the config needs no

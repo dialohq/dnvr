@@ -17,7 +17,7 @@
   procs =
     lib.mapAttrs (
       n: p:
-        (lib.removeAttrs (lib.optionalAttrs (builtins.isAttrs p) p) ["command"])
+        (p.runner_settings."process-compose" or {})
         // {
           command = resolveCommand n p;
         }

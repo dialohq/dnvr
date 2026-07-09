@@ -2,7 +2,7 @@
   pkgs,
   lib ? pkgs.lib,
   extraRunners ? {},
-  extraPresets ? {},
+  presets ? {},
 }: let
   mkScript = import ./script.nix {inherit pkgs lib;};
 
@@ -15,13 +15,14 @@
 
   runners = builtinRunners // extraRunners;
 
-  presets = (import ./presets) // extraPresets;
+  allPresets = (import ./presets) // presets;
 
   mkEnvs = userModules: let
     result = lib.evalModules {
       modules = [./module.nix] ++ userModules;
       specialArgs = {
-        inherit pkgs mkScript runners presets dnvrState;
+        inherit pkgs mkScript runners dnvrState;
+        presets = allPresets;
       };
     };
   in {
@@ -29,5 +30,6 @@
     config = result.config;
   };
 in {
-  inherit mkEnvs mkScript runners presets dnvrState;
+  inherit mkEnvs mkScript runners dnvrState;
+  presets = allPresets;
 }
