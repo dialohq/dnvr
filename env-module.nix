@@ -11,16 +11,11 @@
 }: let
   inherit (lib) mkOption types;
 
-  serviceValues = lib.attrValues config.services;
+  processValues = lib.attrValues config.processes;
 
-  servicePackages = lib.concatMap (s: s.packages) serviceValues;
-  serviceProcesses = lib.foldl' (a: s: a // s.processes) {} serviceValues;
-  serviceEnv = lib.foldl' (a: s: a // s.env) {} serviceValues;
-  serviceScripts = lib.foldl' (a: s: a // s.scripts) {} serviceValues;
-
-  allProcesses = serviceProcesses // config.processes;
-  allEnv = serviceEnv // config.env;
-  allScripts = serviceScripts // config.scripts;
+  processPackages = lib.concatMap (p: p.packages) processValues;
+  allEnv = lib.foldl' (a: p: a // p.env) {} processValues // config.env;
+  allScripts = lib.foldl' (a: p: a // p.scripts) {} processValues // config.scripts;
 
   scriptPkgs =
     lib.mapAttrsToList
@@ -31,13 +26,14 @@
       })
     allScripts;
 
-  # Wrap each process's command so DNVR_RUNTIME_DIR points at the per-service
+  # Wrap each process's command so DNVR_RUNTIME_DIR points at the per-process
   # runtime/<procname> directory and dnvr-state is on PATH. Lets the inner
   # command just say `dnvr-state set port 5432` without knowing its own name.
+  # The runner receives only {command, runner_settings} — the devshell-facing
+  # buckets (packages, env, scripts) must not leak into runner configs.
   wrapProcess = procName: p: let
-    original = p.command or null;
     wrapped =
-      if lib.isDerivation original
+      if lib.isDerivation p.command
       then
         pkgs.writeShellApplication {
           name = "${procName}-scoped";
@@ -46,16 +42,16 @@
             : "''${DNVR_STATE:?DNVR_STATE must be set}"
             export DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
             mkdir -p "$DNVR_RUNTIME_DIR"
-            exec ${lib.getExe original} "$@"
+            exec ${lib.getExe p.command} "$@"
           '';
         }
-      else original;
-  in
-    if wrapped != null
-    then p // {command = wrapped;}
-    else p;
+      else p.command;
+  in {
+    command = wrapped;
+    inherit (p) runner_settings;
+  };
 
-  wrappedProcesses = lib.mapAttrs wrapProcess allProcesses;
+  wrappedProcesses = lib.mapAttrs wrapProcess config.processes;
 
   upScript = config.runner {
     name = "${name}-up";
@@ -77,7 +73,6 @@
     lib.optionalString (pad > 0) (lib.fixedWidthString pad " " "");
 
   titleSuffix = lib.optionalString (config.description != "") " — ${config.description}";
-  serviceNames = lib.attrNames config.services;
 
   scriptRows =
     lib.mapAttrsToList (n: s: {
@@ -107,7 +102,6 @@
 
   helpText = lib.concatStringsSep "\n" (
     ["dnvr: ${name}${titleSuffix}"]
-    ++ lib.optional (serviceNames != []) "services: ${lib.concatStringsSep ", " serviceNames}"
     ++ ["" "commands:"]
     ++ renderRows "dnvr " listRows
     ++ [
@@ -264,10 +258,6 @@
   };
 
   bannerLines = let
-    serviceLine =
-      lib.optional (serviceNames != [])
-      "services: ${lib.concatStringsSep ", " serviceNames}";
-
     rows =
       [
         {
@@ -284,7 +274,6 @@
       ];
   in
     ["dnvr: ${name}${titleSuffix}"]
-    ++ serviceLine
     ++ ["commands:"]
     ++ renderRows "" rows;
 
@@ -318,14 +307,6 @@ in {
       default = [];
     };
 
-    services = mkOption {
-      type = types.attrsOf (types.submoduleWith {
-        modules = [./service-module.nix];
-        specialArgs = {inherit pkgs presets;};
-      });
-      default = {};
-    };
-
     scripts = mkOption {
       type = types.attrsOf (types.submodule ({name, ...}: {
         options = {
@@ -354,9 +335,16 @@ in {
     };
 
     processes = mkOption {
-      type = types.attrsOf types.anything;
+      type = types.attrsOf (types.submoduleWith {
+        modules = [./process-module.nix];
+        specialArgs = {inherit pkgs presets dnvrState;};
+      });
       default = {};
-      description = "Processes that the runner orchestrates. Merged on top of service-contributed processes.";
+      description = ''
+        Processes that the runner orchestrates. Each is a module — import a
+        preset (`imports = [presets.postgres]`) or set `command` directly.
+        Processes also contribute packages, env, and scripts to the devshell.
+      '';
     };
 
     env = mkOption {
@@ -410,7 +398,7 @@ in {
 
   config.shell = pkgs.mkShell ({
       name = "dnvr-${name}";
-      packages = config.packages ++ servicePackages ++ scriptPkgs ++ [dnvrState dnvrCli];
+      packages = config.packages ++ processPackages ++ scriptPkgs ++ [dnvrState dnvrCli];
       shellHook = ''
         export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
         export DNVR_STATE="$DNVR_ROOT/.dnvr"

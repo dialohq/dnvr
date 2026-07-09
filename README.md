@@ -1,10 +1,10 @@
 # dnvr
 
 Declarative dev environments for Nix flakes. Each environment is a Nix module
-declaring **services** (reusable presets like postgres/clickhouse),
-**processes** (long-running commands orchestrated by a runner), **scripts**
-(commands on the devshell PATH), and **env** vars. dnvr turns every
-`dnvr.envs.<name>` into:
+declaring **processes** (long-running commands orchestrated by a runner —
+each one a module that can import a reusable **preset** like
+postgres/clickhouse), **scripts** (commands on the devshell PATH), and
+**env** vars. dnvr turns every `dnvr.envs.<name>` into:
 
 - `devShells.<name>` — enter with `nix develop .#<name>`
 - `apps.<name>-up` — launch the process group with `nix run .#<name>-up`
@@ -33,7 +33,7 @@ built in).
         dnvr.envs.backend = {
           description = "postgres + api server";
 
-          services.pg = {
+          processes.pg = {
             imports = [presets.postgres];
             package = pkgs.postgresql_17;
           };
@@ -73,7 +73,7 @@ $ nix run .#backend-up    # mprocs with pg + api panes
 Every devshell carries a `dnvr` command scoped to its environment:
 
 ```console
-$ dnvr --help     # everything in this shell: services, commands, descriptions
+$ dnvr --help     # everything in this shell: commands, descriptions
 $ dnvr up         # launch the process group
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
@@ -127,7 +127,7 @@ submodule):
 
 | arg | what it is |
 |---|---|
-| `presets` | Built-in service presets (`postgres`, `clickhouse`) plus `dnvr.extraPresets`. |
+| `presets` | Built-in process presets (`postgres`, `clickhouse`) plus `dnvr.presets`. |
 | `runners` | Up-script builders (`mprocs`, `process-compose`) plus `dnvr.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
@@ -136,11 +136,17 @@ submodule):
 
 - `description` — one-liner shown in the entry banner.
 - `packages` — extra packages on the devshell PATH.
-- `services.<svc>` — module instances; import a preset and set its options.
-  Services contribute packages, processes, env, and scripts.
-- `processes.<proc>.command` — derivation (or attrset with `command`) the
-  runner orchestrates. Each process gets `DNVR_RUNTIME_DIR` scoped to its
-  name so `dnvr-state set` needs no self-identification.
+- `processes.<proc>` — a module per process the runner orchestrates. Either
+  set `command` (derivation or string) directly, or import a preset and set
+  its options (`imports = [presets.postgres]`). Instantiating the same preset
+  under two names gives two independent instances — the process name
+  namespaces data dirs, env vars, and `dnvr-state` scope. Besides `command`,
+  a process can contribute `packages`, `env`, and `scripts` to the devshell,
+  and carry runner-specific config under
+  `runner_settings.<runner>.<key>` (e.g.
+  `runner_settings."process-compose".depends_on`); each runner reads only its
+  own key. Each process gets `DNVR_RUNTIME_DIR` scoped to its name so
+  `dnvr-state set` needs no self-identification.
 - `scripts.<name>` — `{text, runtimeInputs?, shell?, description?}` commands
   on the devshell PATH.
 - `env` — exported in the devshell and to every runner process.
@@ -152,12 +158,12 @@ submodule):
 ## Runtime contract
 
 Entering a devshell sets `DNVR_ROOT` (git toplevel) and
-`DNVR_STATE` (`$DNVR_ROOT/.dnvr`). Services publish and consume
+`DNVR_STATE` (`$DNVR_ROOT/.dnvr`). Processes publish and consume
 discovery values through `dnvr-state`:
 
 ```console
 $ dnvr-state set port 5432          # publish to own scope
-$ dnvr-state get pg.socketDir       # read another service's value
+$ dnvr-state get pg.socketDir       # read another process's value
 $ dnvr-state wait pg.socketDir      # block until published (--timeout N)
 $ dnvr-state pick-port              # random free TCP port
 $ dnvr-state dump                   # list everything published
@@ -168,7 +174,10 @@ read stale values.
 
 ## Top-level options
 
-- `dnvr.extraPresets` / `dnvr.extraRunners` — extend the registries.
+- `dnvr.presets.<name>` — custom process presets (deferred modules) merged
+  over the built-ins; import them in any env via `processes.<proc>.imports`.
+- `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
+  per-process config from `runner_settings.<its-name>` by convention.
 - `dnvr.exposeApps` — wire `apps.<name>-up` (default `true`).
 - `dnvr.picker.enable` — a devshell (default name `"default"`, so plain
   `nix develop`) that pops a `gum choose` TUI, writes `.envrc` for the chosen

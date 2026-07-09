@@ -6,19 +6,19 @@ pkgs.writeShellApplication {
   name = "dnvr-state";
   runtimeInputs = [pkgs.coreutils pkgs.python3];
   text = ''
-    # Per-service runtime state directory. Convention:
-    #   $DNVR_STATE/runtime/<service>/<key>
-    # Each service's wrapper has DNVR_RUNTIME_DIR pointing at its own dir
+    # Per-process runtime state directory. Convention:
+    #   $DNVR_STATE/runtime/<process>/<key>
+    # Each process's wrapper has DNVR_RUNTIME_DIR pointing at its own dir
     # (set by env-module.nix), so `set` and `get` (own-scope) need no
-    # service name. Cross-service reads use `get <svc>.<key>`.
+    # process name. Cross-process reads use `get <proc>.<key>`.
 
     usage() {
       cat >&2 <<EOF
     dnvr-state — runtime state for dnvr envs
 
       dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
-      dnvr-state get <svc>.<key>            read another service's value, fail if missing
-      dnvr-state wait <svc>.<key> [--timeout=N]  block until <svc>.<key> exists (default 30s)
+      dnvr-state get <proc>.<key>           read another process's value, fail if missing
+      dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> exists (default 30s)
       dnvr-state pick-port                  echo a random free TCP port
       dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
 
@@ -29,12 +29,12 @@ pkgs.writeShellApplication {
     : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
     RUNTIME="$DNVR_STATE/runtime"
 
-    # Split "svc.key" → svc, key. Service names may contain dashes; keys must
+    # Split "proc.key" → proc, key. Process names may contain dashes; keys must
     # not contain dots.
     split_ref() {
       local ref="$1"
       if [[ "$ref" != *.* ]]; then
-        echo "dnvr-state: expected '<svc>.<key>', got '$ref'" >&2
+        echo "dnvr-state: expected '<proc>.<key>', got '$ref'" >&2
         exit 2
       fi
       svc="''${ref%%.*}"
@@ -48,7 +48,7 @@ pkgs.writeShellApplication {
     case "$cmd" in
       set)
         [ "$#" -eq 2 ] || usage
-        : "''${DNVR_RUNTIME_DIR:?dnvr-state set must run in a service-scoped wrapper (DNVR_RUNTIME_DIR unset)}"
+        : "''${DNVR_RUNTIME_DIR:?dnvr-state set must run in a process-scoped wrapper (DNVR_RUNTIME_DIR unset)}"
         mkdir -p "$DNVR_RUNTIME_DIR"
         # Atomic write: temp + rename, so readers never see a half-written file.
         tmp=$(mktemp -p "$DNVR_RUNTIME_DIR" ".tmp.$1.XXXXXX")

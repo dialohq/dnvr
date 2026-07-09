@@ -14,7 +14,7 @@ in {
     }: let
       framework = import ./. {
         inherit pkgs lib;
-        inherit (config.dnvr) extraRunners extraPresets;
+        inherit (config.dnvr) extraRunners presets;
       };
     in {
       options.dnvr = {
@@ -24,10 +24,10 @@ in {
           description = "Additional runners merged into the built-in `runners` registry.";
         };
 
-        extraPresets = mkOption {
+        presets = mkOption {
           type = types.attrsOf types.deferredModule;
           default = {};
-          description = "Additional service presets merged into the built-in `presets` registry.";
+          description = "Custom process presets merged over the built-in `presets` registry.";
         };
 
         exposeApps = mkOption {
