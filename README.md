@@ -177,6 +177,14 @@ $ dnvr-state dump                   # list everything published
 The runner wipes `$DNVR_STATE/runtime` on every launch so consumers never
 read stale values.
 
+The built-in presets publish their full connection surface. postgres:
+`port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at
+startup, then `database`, `url`, `socketUrl` once the server accepts
+connections and the databases exist. clickhouse: `httpPort`, `tcpPort`,
+`host`, `httpUrl`, `user` (and `postgresqlPort` when set) at startup, then
+`database` once the server answers queries. The late keys are the ones to
+`dnvr://`-ref when you need readiness, not just discovery.
+
 ### `dnvr://` refs
 
 A process `env` value that is exactly `dnvr://<proc>/<key>` is a reference
