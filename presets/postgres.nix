@@ -18,14 +18,50 @@ in {
         signal for consumers.
       '';
     };
-
+    extraDatabases = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Additional databases created alongside `database`.";
+    };
+    initialScript = mkOption {
+      type = types.nullOr types.lines;
+      default = null;
+      description = ''
+        SQL run against `database` right after it is first created —
+        not on subsequent launches.
+      '';
+    };
     port = mkOption {
       type = types.port;
       default = 5432;
     };
+    listenAddresses = mkOption {
+      type = types.str;
+      default = "127.0.0.1";
+      description = ''
+        postgres `listen_addresses`. Empty string disables TCP entirely
+        (socket-only); `host` and `url` are then not published.
+      '';
+    };
     package = mkOption {
       type = types.package;
       default = pkgs.postgresql;
+    };
+    extensions = mkOption {
+      type = types.nullOr (types.functionTo (types.listOf types.package));
+      default = null;
+      example = lib.literalExpression "ps: [ps.postgis ps.plpgsql_check]";
+      description = "Extensions to bake in via `package.withPackages`.";
+    };
+    initdbArgs = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "Extra initdb arguments (besides -D and --username).";
+    };
+    authentication = mkOption {
+      type = types.lines;
+      default = "";
+      description = "Lines appended to pg_hba.conf right after initdb.";
     };
     dataDir = mkOption {
       type = types.str;
@@ -43,7 +79,7 @@ in {
       type = types.str;
       default = "postgres";
     };
-    extraSettings = mkOption {
+    settings = mkOption {
       type = types.attrsOf (types.oneOf [types.str types.int types.bool]);
       default = {};
       description = "Extra `-c key=value` postgres settings.";
@@ -53,11 +89,29 @@ in {
   config = let
     # Process name may contain dashes (e.g. "pg-test"); bash env var names can't.
     upper = lib.toUpper (lib.replaceStrings ["-"] ["_"] name);
+    postgresPkg =
+      if config.extensions == null
+      then config.package
+      else config.package.withPackages config.extensions;
     extraArgs =
       lib.concatStringsSep " "
-      (lib.mapAttrsToList (k: v: "-c ${k}=${toString v}") config.extraSettings);
+      (lib.mapAttrsToList (k: v: "-c ${k}=${toString v}") config.settings);
+    tcpEnabled = config.listenAddresses != "";
+    # A connectable address for `host`/`url`: wildcard binds normalize to
+    # loopback, otherwise the first listed address.
+    hostAddr = let
+      first = lib.head (lib.splitString "," config.listenAddresses);
+    in
+      if lib.elem first ["*" "0.0.0.0" "::"]
+      then "127.0.0.1"
+      else first;
+    allDatabases = [config.database] ++ config.extraDatabases;
+    initialScriptFile =
+      if config.initialScript == null
+      then null
+      else pkgs.writeText "${name}-initial.sql" config.initialScript;
   in {
-    packages = [config.package];
+    packages = [postgresPkg];
 
     env = {
       "PG_${upper}_PORT" = toString config.port;
@@ -68,25 +122,32 @@ in {
 
     command = pkgs.writeShellApplication {
       name = "${name}-pg";
-      runtimeInputs = [config.package pkgs.coreutils pkgs.fblog dnvrState];
+      runtimeInputs = [postgresPkg pkgs.coreutils pkgs.fblog dnvrState];
       text = ''
         set -e
         : "''${DNVR_ROOT:?DNVR_ROOT must be set}"
         mkdir -p "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
         if [ ! -d "$DNVR_ROOT/${config.dataDir}" ]; then
           echo "[${name}] initdb $DNVR_ROOT/${config.dataDir} ..."
-          initdb -D "$DNVR_ROOT/${config.dataDir}" --username=${config.superuser}
+          initdb -D "$DNVR_ROOT/${config.dataDir}" --username=${config.superuser} ${lib.escapeShellArgs config.initdbArgs}
+          ${lib.optionalString (config.authentication != "") ''
+          printf '%s\n' ${lib.escapeShellArg config.authentication} >> "$DNVR_ROOT/${config.dataDir}/pg_hba.conf"
+        ''}
         fi
 
         # Publish discovery info for other processes (atlas-watch, tests, …)
         # via dnvr-state. Published before postgres is *ready* — consumers
-        # that only need "where is it?" read these; `database` is published
-        # separately below, only once the server accepts connections.
+        # that only need "where is it?" read these; `database`/`url`/
+        # `socketUrl` are published separately below, only once the server
+        # accepts connections.
         dnvr-state set port "${toString config.port}"
         dnvr-state set socketDir "$DNVR_ROOT/${config.socketDir}"
         dnvr-state set dataDir "$DNVR_ROOT/${config.dataDir}"
         dnvr-state set user "${config.superuser}"
         dnvr-state set bootstrapDatabase postgres
+        ${lib.optionalString tcpEnabled ''
+          dnvr-state set host "${hostAddr}"
+        ''}
 
         # Native postgres jsonlog → .dnvr/logs/<name>.json (what agents
         # tail). We also tail it through fblog to render a pretty stream on
@@ -95,7 +156,7 @@ in {
         LOG_JSON="$DNVR_ROOT/${config.logDir}/${name}.json"
         echo "[${name}] starting postgres on port ${toString config.port} ..."
         postgres -D "$DNVR_ROOT/${config.dataDir}" \
-          -c listen_addresses=127.0.0.1 \
+          -c listen_addresses=${lib.escapeShellArg config.listenAddresses} \
           -c port=${toString config.port} \
           -c unix_socket_directories="$DNVR_ROOT/${config.socketDir}" \
           -c logging_collector=on \
@@ -131,9 +192,10 @@ in {
         fi
 
         # Wait until the server accepts connections, ensure the configured
-        # database exists, then publish it. Consumers holding
-        # `dnvr://<name>/database` refs unblock here — after the DB is
-        # actually usable, not merely after the postmaster forked.
+        # databases exist, then publish. Consumers holding
+        # `dnvr://<name>/database` (or url/socketUrl) refs unblock here —
+        # after the DB is actually usable, not merely after the postmaster
+        # forked.
         PGARGS=(-h "$DNVR_ROOT/${config.socketDir}" -p ${toString config.port} -U ${config.superuser})
         until pg_isready -q "''${PGARGS[@]}"; do
           if ! kill -0 $PG_PID 2>/dev/null; then
@@ -142,11 +204,22 @@ in {
           fi
           sleep 0.1
         done
-        if [ -z "$(psql "''${PGARGS[@]}" -d postgres -tAc \
-            "SELECT 1 FROM pg_database WHERE datname = '${config.database}'")" ]; then
-          echo "[${name}] creating database ${config.database} ..."
-          createdb "''${PGARGS[@]}" ${lib.escapeShellArg config.database}
-        fi
+        ${lib.concatMapStrings (db: ''
+          if [ -z "$(psql "''${PGARGS[@]}" -d postgres -tAc \
+              "SELECT 1 FROM pg_database WHERE datname = '${db}'")" ]; then
+            echo "[${name}] creating database ${db} ..."
+            createdb "''${PGARGS[@]}" ${lib.escapeShellArg db}
+            ${lib.optionalString (db == config.database && initialScriptFile != null) ''
+            echo "[${name}] running initialScript against ${db} ..."
+            psql "''${PGARGS[@]}" -d ${lib.escapeShellArg db} -v ON_ERROR_STOP=1 -f ${initialScriptFile}
+          ''}
+          fi
+        '')
+        allDatabases}
+        ${lib.optionalString tcpEnabled ''
+          dnvr-state set url "postgresql://${config.superuser}@${hostAddr}:${toString config.port}/${config.database}"
+        ''}
+        dnvr-state set socketUrl "postgresql://${config.superuser}@/${config.database}?host=$DNVR_ROOT/${config.socketDir}"
         dnvr-state set database ${lib.escapeShellArg config.database}
 
         # fblog renders structured logs. Postgres jsonlog uses `timestamp`

@@ -10,6 +10,13 @@
 
   upperName = lib.toUpper (lib.replaceStrings ["-"] ["_"] name);
 
+  # A connectable address for `host`/`httpUrl`: wildcard binds normalize to
+  # loopback.
+  hostAddr =
+    if lib.elem config.listenHost ["*" "0.0.0.0" "::"]
+    then "127.0.0.1"
+    else config.listenHost;
+
   # Ports are resolved by clickhouse at startup via `from_env`. Default to
   # per-process env-var names; callers can override `httpPortEnv`/`tcpPortEnv`
   # to point at shared names like `CH_HTTP_PORT` for dynamic-port setups via
@@ -17,9 +24,10 @@
   configXml = pkgs.writeText "${name}-clickhouse.xml" ''
     <?xml version="1.0"?>
     <clickhouse>
-      <listen_host>127.0.0.1</listen_host>
+      <listen_host>${config.listenHost}</listen_host>
       <http_port from_env="${config.httpPortEnv}"/>
       <tcp_port from_env="${config.tcpPortEnv}"/>
+      ${lib.optionalString (config.postgresqlPort != null) "<postgresql_port>${toString config.postgresqlPort}</postgresql_port>"}
       <path>${config.dataDir}/</path>
       <tmp_path>${config.dataDir}/tmp/</tmp_path>
       <user_files_path>${config.dataDir}/user_files/</user_files_path>
@@ -55,13 +63,27 @@
           </interval>
         </default>
       </quotas>
+      ${config.extraConfigXml}
     </clickhouse>
   '';
 in {
   options = {
+    database = mkOption {
+      type = types.str;
+      description = ''
+        Database to create (if missing) once the server answers queries.
+        Required. Published as `database` only after it exists, so
+        `dnvr://<name>/database` doubles as a readiness signal.
+      '';
+    };
     package = mkOption {
       type = types.package;
       default = pkgs.clickhouse;
+    };
+    listenHost = mkOption {
+      type = types.str;
+      default = "127.0.0.1";
+      description = "clickhouse `listen_host`.";
     };
     httpPort = mkOption {
       type = types.nullOr types.port;
@@ -75,6 +97,11 @@ in {
     tcpPort = mkOption {
       type = types.nullOr types.port;
       default = 9000;
+    };
+    postgresqlPort = mkOption {
+      type = types.nullOr types.port;
+      default = null;
+      description = "Expose the postgres wire protocol on this port (clickhouse `postgresql_port`).";
     };
     httpPortEnv = mkOption {
       type = types.str;
@@ -102,6 +129,11 @@ in {
       type = types.str;
       default = "UTC";
     };
+    extraConfigXml = mkOption {
+      type = types.lines;
+      default = "";
+      description = "Raw XML injected into the server config, inside <clickhouse>.";
+    };
   };
 
   config = {
@@ -118,6 +150,7 @@ in {
         "${config.tcpPortEnv}" = toString config.tcpPort;
       })
       // {
+        "CH_${upperName}_DATABASE" = config.database;
         "CH_${upperName}_LOG" = "${config.logDir}/${name}.log";
       };
 
@@ -140,11 +173,17 @@ in {
           export ${config.tcpPortEnv}
         fi
 
-        # Publish discovery info so consumers (the tests pane, anything else
-        # that needs CLICKHOUSE_HOST) can `dnvr-state wait` for us.
+        # Publish discovery info before the server is *ready* — consumers
+        # that only need "where is it?" read these; `database` is published
+        # separately below, once the server answers queries.
         dnvr-state set httpPort "''$${config.httpPortEnv}"
         dnvr-state set tcpPort  "''$${config.tcpPortEnv}"
-        dnvr-state set host     "http://127.0.0.1:''$${config.httpPortEnv}"
+        dnvr-state set host     "${hostAddr}"
+        dnvr-state set httpUrl  "http://${hostAddr}:''$${config.httpPortEnv}"
+        dnvr-state set user     default
+        ${lib.optionalString (config.postgresqlPort != null) ''
+          dnvr-state set postgresqlPort "${toString config.postgresqlPort}"
+        ''}
 
         mkdir -p \
           "$DNVR_ROOT/${config.dataDir}" \
@@ -156,7 +195,30 @@ in {
         cd "$DNVR_ROOT"
         # Native dual output: <log>file</log> + <console>true</console> writes
         # to both the log file (for agents) and stderr (for mprocs panes).
-        exec clickhouse-server --config-file=${configXml}
+        clickhouse-server --config-file=${configXml} &
+        CH_PID=$!
+        trap '
+          kill -TERM $CH_PID 2>/dev/null || true
+          wait $CH_PID 2>/dev/null || true
+        ' EXIT INT TERM
+
+        # Wait until the server answers queries, ensure the configured
+        # database exists, then publish it. Consumers holding
+        # `dnvr://<name>/database` refs unblock here.
+        until clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
+            --query "SELECT 1" >/dev/null 2>&1; do
+          if ! kill -0 $CH_PID 2>/dev/null; then
+            echo "[${name}] clickhouse exited before becoming ready" >&2
+            exit 1
+          fi
+          sleep 0.2
+        done
+        clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
+          --query 'CREATE DATABASE IF NOT EXISTS "${config.database}"'
+        dnvr-state set database ${lib.escapeShellArg config.database}
+        echo "[${name}] ready — database ${config.database} on tcp ''$${config.tcpPortEnv} / http ''$${config.httpPortEnv}"
+
+        wait $CH_PID
       '';
     };
   };
