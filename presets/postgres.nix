@@ -84,6 +84,30 @@ in {
       default = {};
       description = "Extra `-c key=value` postgres settings.";
     };
+
+    # Computed, read-only. Static strings usable anywhere in config — no
+    # readiness implied, no waiting. Paths are `$DNVR_ROOT`-relative shell
+    # strings, expanded at export time (see env-export.nix).
+    socketPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Absolute socket directory (`$DNVR_ROOT/<socketDir>`), e.g. for PGHOST.";
+    };
+    dataPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Absolute data directory (`$DNVR_ROOT/<dataDir>`).";
+    };
+    url = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "TCP connection URL. Reading it with TCP disabled (listenAddresses = \"\") is an eval error; use `socketUrl` then.";
+    };
+    socketUrl = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Unix-socket connection URL (`$DNVR_ROOT`-relative).";
+    };
   };
 
   config = let
@@ -111,6 +135,14 @@ in {
       then null
       else pkgs.writeText "${name}-initial.sql" config.initialScript;
   in {
+    socketPath = "$DNVR_ROOT/${config.socketDir}";
+    dataPath = "$DNVR_ROOT/${config.dataDir}";
+    url =
+      if tcpEnabled
+      then "postgresql://${config.superuser}@${hostAddr}:${toString config.port}/${config.database}"
+      else throw "dnvr postgres '${name}': `url` needs TCP but listenAddresses is empty — use `socketUrl`";
+    socketUrl = "postgresql://${config.superuser}@/${config.database}?host=$DNVR_ROOT/${config.socketDir}";
+
     packages = [postgresPkg];
 
     env = {

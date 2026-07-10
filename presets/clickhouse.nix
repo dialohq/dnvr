@@ -134,9 +134,28 @@ in {
       default = "";
       description = "Raw XML injected into the server config, inside <clickhouse>.";
     };
+
+    # Computed, read-only. Static strings usable anywhere in config — no
+    # readiness implied, no waiting.
+    httpUrl = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "HTTP endpoint. Reading it with a dynamic port (httpPort = null) is an eval error; use `dnvr://<name>/httpUrl` then.";
+    };
+    dataPath = mkOption {
+      type = types.str;
+      readOnly = true;
+      description = "Absolute data directory (`$DNVR_ROOT/<dataDir>`).";
+    };
   };
 
   config = {
+    httpUrl =
+      if config.httpPort != null
+      then "http://${hostAddr}:${toString config.httpPort}"
+      else throw "dnvr clickhouse '${name}': `httpUrl` needs a static httpPort but it is null (dynamic) — use `dnvr://<name>/httpUrl` at runtime";
+    dataPath = "$DNVR_ROOT/${config.dataDir}";
+
     packages = [config.package];
 
     # Set the port env vars statically when httpPort/tcpPort have values. The

@@ -30,16 +30,28 @@
     processes = procs;
   });
 
+  inherit (import ../env-export.nix {inherit lib;}) exportLine refersToRoot;
+
+  # `$DNVR_ROOT` in env values expands at export time (see env-export.nix);
+  # only then does this script need DNVR_ROOT itself.
+  rootGuard =
+    lib.optionalString (lib.any refersToRoot (lib.attrValues env))
+    '': "''${DNVR_ROOT:?DNVR_ROOT must be set (run via nix develop)}"'';
+
   envExports =
     lib.concatStringsSep "\n"
-    (lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg (toString v)}") env);
+    (lib.mapAttrsToList exportLine env);
 in
   pkgs.writeShellApplication {
     inherit name;
+    # Env exports single-quote user values, which may legitimately contain
+    # `$` (passwords, templates); SC2016 would flag every one of them.
+    excludeShellChecks = ["SC2016"];
     runtimeInputs = [pkgs.process-compose];
     text = ''
-      ${envExports}
       : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+      ${rootGuard}
+      ${envExports}
       mkdir -p "$DNVR_STATE/logs"
       # Wipe stale runtime/; see comment in runners/mprocs.nix.
       ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime"

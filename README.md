@@ -151,7 +151,8 @@ submodule):
   [`dnvr://` refs](#dnvr-refs).
 - `scripts.<name>` — `{text, runtimeInputs?, shell?, description?}` commands
   on the devshell PATH.
-- `env` — exported in the devshell and to every runner process. Refs are
+- `env` — exported in the devshell and to every runner process. `$DNVR_ROOT`
+  in values expands at export time (see Static values below). Refs are
   not allowed here; they belong on the process that consumes them.
 - `dependencies` — read-only: `process -> [dependencies]`, derived from
   `dnvr://` refs.
@@ -184,6 +185,44 @@ connections and the databases exist. clickhouse: `httpPort`, `tcpPort`,
 `host`, `httpUrl`, `user` (and `postgresqlPort` when set) at startup, then
 `database` once the server answers queries. The late keys are the ones to
 `dnvr://`-ref when you need readiness, not just discovery.
+
+### Static values and `$DNVR_ROOT`
+
+Not everything needs runtime discovery. Preset values fall into three
+tiers:
+
+1. **Eval-static** — `port`, `database`, `user`: read them straight off
+   the config (`config.processes.db.port`).
+2. **Location-dependent** — paths under the repo root. Presets expose
+   these as read-only computed options (`socketPath`, `dataPath`, `url`,
+   `socketUrl` on postgres; `httpUrl`, `dataPath` on clickhouse) whose
+   values are `$DNVR_ROOT`-relative shell strings.
+3. **Runtime-published** — dynamically picked ports, readiness. This is
+   `dnvr://` territory (next section) and the only tier that waits.
+
+Tiers 1–2 are just strings: always set, never waited on. Wire them into
+env for ad-hoc use — `psql` works in the devshell whether or not the
+group is running (it simply fails to connect if postgres is down):
+
+```nix
+dnvr.shells.backend = {config, ...}: {
+  processes.db = { imports = [presets.postgres]; database = "app"; };
+  env = {
+    PGHOST = config.processes.db.socketPath;
+    PGDATABASE = config.processes.db.database;
+    PGUSER = config.processes.db.superuser;
+  };
+};
+```
+
+The expansion rule, in one sentence: **the literal substring
+`$DNVR_ROOT` in an env value is expanded by the shell at export time
+(shellHook, runner, wrapper); everything else — including any other
+`$` — is exported verbatim.** Values are expanded before any program or
+subshell reads them, so they are correct in every shell, nushell
+included. One rule of thumb follows: in script bodies, read the env var
+(`$PGHOST` / `$env.PGHOST`), not the raw option — raw `$DNVR_ROOT`
+strings only self-expand in POSIX-shell contexts.
 
 ### `dnvr://` refs
 
