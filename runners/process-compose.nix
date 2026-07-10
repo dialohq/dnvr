@@ -7,19 +7,14 @@
   env ? {},
   prerun ? "",
 }: let
-  resolveCommand = procName: p: let
-    cmd = p.command or p;
-  in
-    if lib.isDerivation cmd
-    then "${cmd}/bin/${cmd.meta.mainProgram or cmd.pname or procName}"
-    else cmd;
+  runnerLib = import ./lib.nix {inherit pkgs lib;};
 
   procs =
     lib.mapAttrs (
       n: p:
         (p.runner_settings."process-compose" or {})
         // {
-          command = resolveCommand n p;
+          command = runnerLib.resolveCommand n p;
         }
     )
     processes;
@@ -29,44 +24,16 @@
     log_location = "@PC_LOG@";
     processes = procs;
   });
-
-  inherit (import ../env-export.nix {inherit lib;}) exportLine refersToRoot;
-
-  # `$DNVR_ROOT` in env values expands at export time (see env-export.nix);
-  # only then does this script need DNVR_ROOT itself.
-  rootGuard =
-    lib.optionalString (lib.any refersToRoot (lib.attrValues env))
-    '': "''${DNVR_ROOT:?DNVR_ROOT must be set (run via nix develop)}"'';
-
-  envExports =
-    lib.concatStringsSep "\n"
-    (lib.mapAttrsToList exportLine env);
-
-  # Scoped wipe of this group's runtime state; see comment in
-  # runners/mprocs.nix.
-  runtimeWipe =
-    lib.concatMapStrings
-    (n: ''
-      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime/"${lib.escapeShellArg n}
-    '')
-    (lib.attrNames processes);
 in
-  pkgs.writeShellApplication {
-    inherit name;
-    # Env exports single-quote user values, which may legitimately contain
-    # `$` (passwords, templates); SC2016 would flag every one of them.
-    excludeShellChecks = ["SC2016"];
+  runnerLib.mkUpScript {
+    inherit name processes env prerun;
     runtimeInputs = [pkgs.process-compose];
-    text = ''
-      : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
-      ${rootGuard}
-      ${envExports}
-      mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
-      ${runtimeWipe}
+    # The log path is runtime-dependent ($DNVR_STATE), so it is patched into
+    # a temp copy of the store config at launch.
+    exec = ''
       __cfg=$(${pkgs.coreutils}/bin/mktemp -t process-compose-XXXXXX.yaml)
       trap '${pkgs.coreutils}/bin/rm -f "$__cfg"' EXIT
       ${pkgs.gnused}/bin/sed "s|@PC_LOG@|$DNVR_STATE/logs/process-compose.log|g" ${cfg} > "$__cfg"
-      ${prerun}
       exec process-compose -f "$__cfg" "$@"
     '';
   }
