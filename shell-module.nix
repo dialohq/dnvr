@@ -635,12 +635,6 @@ in {
       description = "Function `{name, processes, env}: drv` that produces the up-script.";
     };
 
-    flags = mkOption {
-      type = types.attrsOf types.anything;
-      default = {};
-      description = "Free-form switches modules can read to alter behaviour (e.g. flags.ci).";
-    };
-
     shell = mkOption {
       type = types.package;
       readOnly = true;

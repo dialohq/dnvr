@@ -160,7 +160,7 @@ submodule):
 - `prerun` — shell code run inside the up-script before the runner execs
   (dynamic port picking etc.; anything `export`ed flows to all processes).
 - `runner` — defaults to `runners.mprocs`.
-- `shellHook`, `flags` — escape hatches.
+- `shellHook` — escape hatch.
 
 ## Runtime contract
 
