@@ -179,7 +179,18 @@
     prerun = config.prerun;
   };
 
-  envForShell = lib.mapAttrs (_: v: toString v) allEnv;
+  inherit (import ./env-export.nix {inherit lib;}) exportLine refersToRoot;
+
+  # Values referencing $DNVR_ROOT can't go through mkShell's static `env`
+  # attr — nothing would expand them there. They export in the shellHook
+  # instead, right after DNVR_ROOT is set.
+  envForShell =
+    lib.mapAttrs (_: v: toString v)
+    (lib.filterAttrs (_: v: !(refersToRoot v)) allEnv);
+
+  rootedEnvExports =
+    lib.concatStringsSep "\n"
+    (lib.mapAttrsToList exportLine (lib.filterAttrs (_: refersToRoot) allEnv));
 
   # Banner: rendered by `gum style` at runtime. The nix string holds only plain
   # text — no raw ANSI bytes that would otherwise trip nix's strict JSON parser
@@ -580,6 +591,7 @@ in {
         export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
         export DNVR_STATE="$DNVR_ROOT/.dnvr"
         mkdir -p "$DNVR_STATE"
+        ${rootedEnvExports}
         export XDG_DATA_DIRS="${dnvrShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
         export FPATH="${dnvrShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"
         ${pkgs.coreutils}/bin/install -m 0644 ${nuCompletionFile} "$DNVR_STATE/dnvr-completions.nu"
