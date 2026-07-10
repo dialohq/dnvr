@@ -7,6 +7,7 @@
   ...
 }: let
   inherit (lib) mkOption types;
+  presetLib = import ./lib.nix {inherit lib;};
 in {
   options = {
     database = mkOption {
@@ -111,8 +112,7 @@ in {
   };
 
   config = let
-    # Process name may contain dashes (e.g. "pg-test"); bash env var names can't.
-    upper = lib.toUpper (lib.replaceStrings ["-"] ["_"] name);
+    upper = presetLib.envPrefix name;
     postgresPkg =
       if config.extensions == null
       then config.package
@@ -121,14 +121,7 @@ in {
       lib.concatStringsSep " "
       (lib.mapAttrsToList (k: v: "-c ${k}=${toString v}") config.settings);
     tcpEnabled = config.listenAddresses != "";
-    # A connectable address for `host`/`url`: wildcard binds normalize to
-    # loopback, otherwise the first listed address.
-    hostAddr = let
-      first = lib.head (lib.splitString "," config.listenAddresses);
-    in
-      if lib.elem first ["*" "0.0.0.0" "::"]
-      then "127.0.0.1"
-      else first;
+    hostAddr = presetLib.connectableHost config.listenAddresses;
     allDatabases = [config.database] ++ config.extraDatabases;
     initialScriptFile =
       if config.initialScript == null
@@ -225,13 +218,11 @@ in {
         # publish the readiness keys — `dnvr://<name>/database` (or
         # url/socketUrl) refs unblock only here.
         PGARGS=(-h "$DNVR_ROOT/${config.socketDir}" -p ${toString config.port} -U ${config.superuser})
-        until pg_isready -q "''${PGARGS[@]}"; do
-          if ! kill -0 $PG_PID 2>/dev/null; then
-            echo "[${name}] postgres exited before becoming ready" >&2
-            exit 1
-          fi
-          sleep 0.1
-        done
+        ${presetLib.untilReady {
+        pid = "$PG_PID";
+        check = ''pg_isready -q "''${PGARGS[@]}"'';
+        onDead = "[${name}] postgres exited before becoming ready";
+      }}
         ${lib.concatMapStrings (db: ''
           if [ -z "$(psql "''${PGARGS[@]}" -d postgres -tAc \
               "SELECT 1 FROM pg_database WHERE datname = '${db}'")" ]; then
@@ -245,9 +236,9 @@ in {
         '')
         allDatabases}
         ${lib.optionalString tcpEnabled ''
-          dnvr-state set url "postgresql://${config.superuser}@${hostAddr}:${toString config.port}/${config.database}"
+          dnvr-state set url ${lib.escapeShellArg config.url}
         ''}
-        dnvr-state set socketUrl "postgresql://${config.superuser}@/${config.database}?host=$DNVR_ROOT/${config.socketDir}"
+        dnvr-state set socketUrl "${config.socketUrl}"
         dnvr-state set database ${lib.escapeShellArg config.database}
 
         # fblog renders structured logs. Postgres jsonlog uses `timestamp`

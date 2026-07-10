@@ -7,15 +7,11 @@
   ...
 }: let
   inherit (lib) mkOption types;
+  presetLib = import ./lib.nix {inherit lib;};
 
-  upperName = lib.toUpper (lib.replaceStrings ["-"] ["_"] name);
+  upperName = presetLib.envPrefix name;
 
-  # A connectable address for `host`/`httpUrl`: wildcard binds normalize to
-  # loopback.
-  hostAddr =
-    if lib.elem config.listenHost ["*" "0.0.0.0" "::"]
-    then "127.0.0.1"
-    else config.listenHost;
+  hostAddr = presetLib.connectableHost config.listenHost;
 
   # Ports are resolved by clickhouse at startup via `from_env`. Default to
   # per-process env-var names; callers can override `httpPortEnv`/`tcpPortEnv`
@@ -222,14 +218,12 @@ in {
 
         # Wait for readiness, ensure the configured database exists, then
         # publish it — `dnvr://<name>/database` refs unblock only here.
-        until clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
-            --query "SELECT 1" >/dev/null 2>&1; do
-          if ! kill -0 $CH_PID 2>/dev/null; then
-            echo "[${name}] clickhouse exited before becoming ready" >&2
-            exit 1
-          fi
-          sleep 0.2
-        done
+        ${presetLib.untilReady {
+        pid = "$CH_PID";
+        check = ''clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" --query "SELECT 1" >/dev/null 2>&1'';
+        onDead = "[${name}] clickhouse exited before becoming ready";
+        interval = "0.2";
+      }}
         clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
           --query 'CREATE DATABASE IF NOT EXISTS "${config.database}"'
         dnvr-state set database ${lib.escapeShellArg config.database}
