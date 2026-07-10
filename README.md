@@ -8,11 +8,12 @@ postgres/clickhouse), **scripts** (commands on the devshell PATH), and
 
 - `devShells.<name>` — enter with `nix develop .#<name>`
 
-Shells are isolated to `.dnvr/*` under the repo root, discover each
-other's runtime values (ports, socket dirs) through the bundled `dnvr-state`
-CLI — or declaratively via `dnvr://` env refs, which double as the process
-dependency graph — and run under a pluggable runner (`mprocs` by default,
-`process-compose` built in).
+Shell state is confined to `.dnvr/*` under the repo root (nothing in
+`$HOME`), namespaced per process — shells in the same repo share it.
+Processes discover each other's runtime values (ports, socket dirs)
+through the bundled `dnvr-state` CLI — or declaratively via `dnvr://`
+env refs, which double as the process dependency graph — and run under
+a pluggable runner (`mprocs` by default, `process-compose` built in).
 
 ## Usage (flake-parts)
 
@@ -175,8 +176,9 @@ $ dnvr-state pick-port              # random free TCP port
 $ dnvr-state dump                   # list everything published
 ```
 
-The runner wipes `$DNVR_STATE/runtime` on every launch so consumers never
-read stale values.
+On every launch the runner wipes `$DNVR_STATE/runtime/<proc>` for its
+own processes so consumers never read stale values; state published by
+another shell's running group is left alone.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at
