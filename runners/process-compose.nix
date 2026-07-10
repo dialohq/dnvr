@@ -41,6 +41,15 @@
   envExports =
     lib.concatStringsSep "\n"
     (lib.mapAttrsToList exportLine env);
+
+  # Scoped wipe of this group's runtime state; see comment in
+  # runners/mprocs.nix.
+  runtimeWipe =
+    lib.concatMapStrings
+    (n: ''
+      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime/"${lib.escapeShellArg n}
+    '')
+    (lib.attrNames processes);
 in
   pkgs.writeShellApplication {
     inherit name;
@@ -52,10 +61,8 @@ in
       : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
       ${rootGuard}
       ${envExports}
-      mkdir -p "$DNVR_STATE/logs"
-      # Wipe stale runtime/; see comment in runners/mprocs.nix.
-      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime"
-      mkdir -p "$DNVR_STATE/runtime"
+      mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
+      ${runtimeWipe}
       __cfg=$(${pkgs.coreutils}/bin/mktemp -t process-compose-XXXXXX.yaml)
       trap '${pkgs.coreutils}/bin/rm -f "$__cfg"' EXIT
       ${pkgs.gnused}/bin/sed "s|@PC_LOG@|$DNVR_STATE/logs/process-compose.log|g" ${cfg} > "$__cfg"

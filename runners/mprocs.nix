@@ -39,6 +39,18 @@
   envExports =
     lib.concatStringsSep "\n"
     (lib.mapAttrsToList exportLine env);
+
+  # Wipe only this group's stale runtime state from a previous launch;
+  # consumers `dnvr-state wait` for fresh values, so a stale `pg-test.port`
+  # from yesterday would otherwise silently mislead them. $DNVR_STATE is
+  # shared by every shell in the repo — another group may be running, and
+  # its published state is not ours to clear.
+  runtimeWipe =
+    lib.concatMapStrings
+    (n: ''
+      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime/"${lib.escapeShellArg n}
+    '')
+    (lib.attrNames processes);
 in
   pkgs.writeShellApplication {
     inherit name;
@@ -51,11 +63,7 @@ in
       ${rootGuard}
       ${envExports}
       mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
-      # Wipe stale runtime/ from a previous launch; consumers `dnvr-state
-      # wait` for fresh values so a stale `pg-test.port` from yesterday would
-      # otherwise silently mislead them.
-      ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime"
-      mkdir -p "$DNVR_STATE/runtime"
+      ${runtimeWipe}
       ${prerun}
       # mprocs hardcodes its own diagnostic log to `mprocs.log` in the cwd
       # (flexi_logger FileSpec::default; no config/env override), so run it
