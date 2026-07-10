@@ -31,7 +31,7 @@ a pluggable runner (`mprocs` by default, `process-compose` built in).
       imports = [inputs.dnvr.flakeModule];
 
       perSystem = {pkgs, presets, ...}: {
-        dnvr.shells.backend = {
+        dnvr.shells.backend = {config, ...}: {
           description = "postgres + api server";
 
           processes.pg = {
@@ -54,7 +54,14 @@ a pluggable runner (`mprocs` by default, `process-compose` built in).
             text = ''psql -f "$DNVR_ROOT/migrations.sql"'';
           };
 
-          env.NODE_ENV = "development";
+          # Static connection env (see Static values below): psql and the
+          # migrate script reach pg in the devshell, no waiting involved.
+          env = {
+            NODE_ENV = "development";
+            PGHOST = config.processes.pg.socketPath;
+            PGDATABASE = config.processes.pg.database;
+            PGUSER = config.processes.pg.superuser;
+          };
         };
       };
     };
@@ -116,7 +123,7 @@ $ dnvr completions fish  # save to ~/.config/fish/completions/dnvr.fish
 ```
 
 All completers call `dnvr --list` (tab-separated `command<TAB>description`)
-at completion time, so they follow whichever env is active and complete
+at completion time, so they follow whichever shell is active and complete
 nothing outside one. `dnvr <TAB>` lists `up` first, then every script with
 its description (`state` and `completions` work but aren't completed).
 
@@ -193,8 +200,8 @@ connections and the databases exist. clickhouse: `httpPort`, `tcpPort`,
 Not everything needs runtime discovery. Preset values fall into three
 tiers:
 
-1. **Eval-static** — `port`, `database`, `user`: read them straight off
-   the config (`config.processes.db.port`).
+1. **Eval-static** — `port`, `database`, `superuser`: read them straight
+   off the config (`config.processes.db.port`).
 2. **Location-dependent** — paths under the repo root. Presets expose
    these as read-only computed options (`socketPath`, `dataPath`, `url`,
    `socketUrl` on postgres; `httpUrl`, `dataPath` on clickhouse) whose
@@ -301,12 +308,14 @@ command whose stdout becomes the var. Resolution happens twice:
 
 Only whole-string values whose scheme has a handler are refs:
 `https://…` and friends pass through untouched. Dependency edges come
-only from `dnvr://` refs.
+only from `dnvr://` refs. Note that registering a handler claims its
+whole scheme — there is no way to pass `<scheme>://…` through as a
+plain value once a handler for it exists.
 
 ## Top-level options
 
 - `dnvr.presets.<name>` — custom process presets (deferred modules) merged
-  over the built-ins; import them in any env via `processes.<proc>.imports`.
+  over the built-ins; import them in any shell via `processes.<proc>.imports`.
 - `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
   per-process config from `runner_settings.<its-name>` by convention.
 - `dnvr.picker.enable` — a devshell that pops a `gum choose` TUI over the

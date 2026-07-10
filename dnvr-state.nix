@@ -30,8 +30,8 @@ pkgs.writeShellApplication {
     : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
     RUNTIME="$DNVR_STATE/runtime"
 
-    # Split "proc.key" → proc, key. Process names may contain dashes; keys must
-    # not contain dots.
+    # Split "proc.key" → proc, key at the first dot. Process names must not
+    # contain dots; keys may.
     split_ref() {
       local ref="$1"
       if [[ "$ref" != *.* ]]; then
@@ -121,9 +121,8 @@ pkgs.writeShellApplication {
         ;;
 
       pick-port)
-        # Bind to port 0, ask the kernel which port it gave us, release.
-        # Race window between close and a consumer binding is small enough for
-        # dev use; if it ever matters we can add SO_REUSEADDR / retry logic.
+        # Bind to port 0, ask the kernel which port it gave us, release. The
+        # close-to-consumer-bind race window is acceptable for dev use.
         python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
         ;;
 

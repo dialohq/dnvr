@@ -167,11 +167,9 @@ in {
         ''}
         fi
 
-        # Publish discovery info for other processes (atlas-watch, tests, …)
-        # via dnvr-state. Published before postgres is *ready* — consumers
-        # that only need "where is it?" read these; `database`/`url`/
-        # `socketUrl` are published separately below, only once the server
-        # accepts connections.
+        # Discovery keys, published before postgres is ready; the readiness
+        # keys (database/url/socketUrl) follow once the server accepts
+        # connections.
         dnvr-state set port "${toString config.port}"
         dnvr-state set socketDir "$DNVR_ROOT/${config.socketDir}"
         dnvr-state set dataDir "$DNVR_ROOT/${config.dataDir}"
@@ -223,11 +221,9 @@ in {
           exit 1
         fi
 
-        # Wait until the server accepts connections, ensure the configured
-        # databases exist, then publish. Consumers holding
-        # `dnvr://<name>/database` (or url/socketUrl) refs unblock here —
-        # after the DB is actually usable, not merely after the postmaster
-        # forked.
+        # Wait for readiness, ensure the configured databases exist, then
+        # publish the readiness keys — `dnvr://<name>/database` (or
+        # url/socketUrl) refs unblock only here.
         PGARGS=(-h "$DNVR_ROOT/${config.socketDir}" -p ${toString config.port} -U ${config.superuser})
         until pg_isready -q "''${PGARGS[@]}"; do
           if ! kill -0 $PG_PID 2>/dev/null; then
