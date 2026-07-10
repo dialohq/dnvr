@@ -676,7 +676,7 @@ in {
       name = "dnvr-${name}";
       packages = config.packages ++ processPackages ++ scriptPkgs ++ [dnvrState dnvrCli];
       shellHook = ''
-        export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel)"
+        export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
         export DNVR_STATE="$DNVR_ROOT/.dnvr"
         mkdir -p "$DNVR_STATE"
         ${rootedEnvExports}

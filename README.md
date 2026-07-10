@@ -163,8 +163,8 @@ submodule):
 
 ## Runtime contract
 
-Entering a devshell sets `DNVR_ROOT` (git toplevel) and
-`DNVR_STATE` (`$DNVR_ROOT/.dnvr`). Processes publish and consume
+Entering a devshell sets `DNVR_ROOT` (git toplevel; cwd outside a git
+repo) and `DNVR_STATE` (`$DNVR_ROOT/.dnvr`). Processes publish and consume
 discovery values through `dnvr-state`:
 
 ```console
