@@ -4,6 +4,10 @@
   names,
 }: let
   joined = lib.concatStringsSep " " (map lib.escapeShellArg names);
+
+  # First line of every picker-written .envrc. Only files carrying it are
+  # ever overwritten — anything else is the user's, hands off.
+  sentinel = "# written by dnvr picker";
 in
   pkgs.mkShell {
     name = "dnvr-picker";
@@ -18,7 +22,14 @@ in
       }
       [ -z "''${choice:-}" ] && exit 0
       __target_root=$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)
-      printf 'use flake .#%s\n' "$choice" > "$__target_root/.envrc"
+      if [ -f "$__target_root/.envrc" ]; then
+        IFS= read -r __dnvr_first < "$__target_root/.envrc" || true
+        if [ "$__dnvr_first" != ${lib.escapeShellArg sentinel} ]; then
+          echo "$__target_root/.envrc exists and wasn't written by the dnvr picker — add 'use flake .#$choice' to it yourself" >&2
+          exit 0
+        fi
+      fi
+      printf '%s\nuse flake .#%s\n' ${lib.escapeShellArg sentinel} "$choice" > "$__target_root/.envrc"
       (cd "$__target_root" && ${pkgs.direnv}/bin/direnv allow .) || true
       echo "wrote $__target_root/.envrc → 'cd' here auto-loads $choice via direnv"
       exit 0
