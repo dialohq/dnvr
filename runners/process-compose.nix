@@ -14,7 +14,11 @@
       n: p:
         (p.runner_settings."process-compose" or {})
         // {
-          command = runnerLib.resolveCommand n p;
+          # process-compose interpolates $VAR/$$ in commands (compose
+          # semantics) before any shell sees them; escape so string
+          # commands run verbatim, like they do under mprocs. Store-path
+          # commands carry no `$`.
+          command = lib.replaceStrings ["$"] ["$$"] (runnerLib.resolveCommand n p);
         }
     )
     processes;
@@ -30,10 +34,10 @@ in
     runtimeInputs = [pkgs.process-compose];
     # The log path is runtime-dependent ($DNVR_STATE), so it is patched into
     # a temp copy of the store config at launch.
-    exec = ''
+    run = ''
       __cfg=$(${pkgs.coreutils}/bin/mktemp -t process-compose-XXXXXX.yaml)
       trap '${pkgs.coreutils}/bin/rm -f "$__cfg"' EXIT
       ${pkgs.gnused}/bin/sed "s|@PC_LOG@|$DNVR_STATE/logs/process-compose.log|g" ${cfg} > "$__cfg"
-      exec process-compose -f "$__cfg" "$@"
+      process-compose -f "$__cfg" "$@"
     '';
   }

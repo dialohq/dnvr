@@ -434,11 +434,12 @@
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
     excludeShellChecks = ["SC2016"];
     text = ''
-      # label, pidfile -> one `dnvr ps` table row. Liveness comes from
-      # kill -0, never from the file's presence: pid keys persist after the
-      # group exits (like every published key) until the next launch wipes
-      # them, so a recorded-but-dead pid reads `exited`; `stopped` means no
-      # pid since the last wipe.
+      # label, pidfile -> one `dnvr ps` table row. The runner removes pid
+      # keys when it returns, so `stopped` (no pid on record) is the normal
+      # not-running state. Liveness still comes from kill -0, never from
+      # the file's presence: a crashed process — or a killed runner —
+      # leaves its pid behind until the next launch wipes it, and those
+      # read `exited`.
       __dnvr_ps_row() {
         local pid="-" status="stopped"
         if [ -f "$2" ]; then
