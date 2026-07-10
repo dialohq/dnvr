@@ -170,7 +170,7 @@ in {
       })
       // {
         "CH_${upperName}_DATABASE" = config.database;
-        "CH_${upperName}_LOG" = "${config.logDir}/${name}.log";
+        "CH_${upperName}_LOG" = "$DNVR_ROOT/${config.logDir}/${name}.log";
       };
 
     command = pkgs.writeShellApplication {
