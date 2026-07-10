@@ -147,9 +147,9 @@ in {
 
     env = {
       "PG_${upper}_PORT" = toString config.port;
-      "PG_${upper}_SOCKET_DIR" = config.socketDir;
+      "PG_${upper}_SOCKET_DIR" = config.socketPath;
       "PG_${upper}_DATABASE" = config.database;
-      "PG_${upper}_LOG_JSON" = "${config.logDir}/${name}.json";
+      "PG_${upper}_LOG_JSON" = "$DNVR_ROOT/${config.logDir}/${name}.json";
     };
 
     command = pkgs.writeShellApplication {
