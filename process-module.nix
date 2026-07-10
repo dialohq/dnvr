@@ -37,7 +37,10 @@ in {
     };
 
     scripts = mkOption {
-      type = types.attrsOf types.anything;
+      type = types.attrsOf (types.submoduleWith {
+        modules = [./script-module.nix];
+        specialArgs = {inherit pkgs;};
+      });
       default = {};
       description = "Scripts this process contributes to the devshell PATH.";
     };
