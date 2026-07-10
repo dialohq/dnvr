@@ -1,15 +1,15 @@
 # dnvr
 
-Declarative dev environments for Nix flakes. Each environment is a Nix module
+Declarative dev environments for Nix flakes. Each **shell** is a Nix module
 declaring **processes** (long-running commands orchestrated by a runner —
 each one a module that can import a reusable **preset** like
 postgres/clickhouse), **scripts** (commands on the devshell PATH), and
-**env** vars. dnvr turns every `dnvr.envs.<name>` into:
+**env** vars. dnvr turns every `dnvr.shells.<name>` into:
 
 - `devShells.<name>` — enter with `nix develop .#<name>`
 - `apps.<name>-up` — launch the process group with `nix run .#<name>-up`
 
-Environments are isolated to `.dnvr/*` under the repo root, discover each
+Shells are isolated to `.dnvr/*` under the repo root, discover each
 other's runtime values (ports, socket dirs) through the bundled `dnvr-state`
 CLI — or declaratively via `dnvr://` env refs, which double as the process
 dependency graph — and run under a pluggable runner (`mprocs` by default,
@@ -31,7 +31,7 @@ dependency graph — and run under a pluggable runner (`mprocs` by default,
       imports = [inputs.dnvr.flakeModule];
 
       perSystem = {pkgs, presets, ...}: {
-        dnvr.envs.backend = {
+        dnvr.shells.backend = {
           description = "postgres + api server";
 
           processes.pg = {
@@ -70,7 +70,7 @@ $ nix run .#backend-up    # mprocs with pg + api panes
 
 ## The `dnvr` CLI
 
-Every devshell carries a `dnvr` command scoped to its environment:
+Every devshell carries a `dnvr` command scoped to its shell:
 
 ```console
 $ dnvr --help     # everything in this shell: commands, descriptions
@@ -122,7 +122,7 @@ its description (`state` and `completions` work but aren't completed).
 
 ## Module args
 
-The flake module injects these into `perSystem` (and into every `dnvr.envs.<name>`
+The flake module injects these into `perSystem` (and into every `dnvr.shells.<name>`
 submodule):
 
 | arg | what it is |
@@ -132,7 +132,7 @@ submodule):
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
 
-## `dnvr.envs.<name>` options
+## `dnvr.shells.<name>` options
 
 - `description` — one-liner shown in the entry banner.
 - `packages` — extra packages on the devshell PATH.
@@ -204,7 +204,7 @@ Semantics:
   devshell they resolve best-effort at entry (exported only if already
   published — re-enter after `dnvr up` to pick them up).
 - **Refs are the dependency graph.** `dnvr --help` shows `api→pg`, and
-  `dnvr.envs.<name>.dependencies` exposes `process -> [dependencies]` for
+  `dnvr.shells.<name>.dependencies` exposes `process -> [dependencies]` for
   tooling. Unknown targets, self-references, and cycles fail at eval time.
 - **Whole-value refs only.** To hand a consumer a composed value (a URL,
   a DSN), publish it already composed from the producer.
@@ -218,11 +218,11 @@ Semantics:
 
 ### Pluggable ref schemes
 
-`dnvr://` is just the built-in entry in `refHandlers`, an env option
+`dnvr://` is just the built-in entry in `refHandlers`, a shell-level option
 mapping URL schemes to resolvers. Register your own — e.g. 1Password:
 
 ```nix
-dnvr.envs.backend = {
+dnvr.shells.backend = {
   refHandlers.op = {
     command = url: "op read ${lib.escapeShellArg url}";
     runtimeInputs = [pkgs._1password-cli];
@@ -257,7 +257,7 @@ come only from `dnvr://` refs.
   `nix develop`) that pops a `gum choose` TUI, writes `.envrc` for the chosen
   env, and hands off to direnv.
 - `dnvr.lib` — read-only handle to the framework
-  (`{mkEnvs, mkScript, runners, presets, dnvrState}`).
+  (`{mkShells, mkScript, runners, presets, dnvrState}`).
 
 ## Without flake-parts
 
@@ -265,5 +265,5 @@ come only from `dnvr://` refs.
 dnvr.lib.mkDnvr {inherit pkgs;}
 ```
 
-returns the same handle; `mkEnvs [module1 module2]` evaluates modules and
+returns the same handle; `mkShells [module1 module2]` evaluates modules and
 returns `{devShells, ups, config}`.

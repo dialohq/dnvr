@@ -9,9 +9,9 @@
   ...
 }: {
   options = {
-    dnvr.envs = lib.mkOption {
+    dnvr.shells = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submoduleWith {
-        modules = [./env-module.nix];
+        modules = [./shell-module.nix];
         specialArgs = {inherit pkgs mkScript runners presets dnvrState;};
       });
       default = {};
@@ -20,7 +20,7 @@
     devShells = lib.mkOption {
       type = lib.types.attrsOf lib.types.package;
       readOnly = true;
-      description = "One devshell per `dnvr.envs.<name>`.";
+      description = "One devshell per `dnvr.shells.<name>`.";
     };
 
     ups = lib.mkOption {
@@ -30,6 +30,6 @@
     };
   };
 
-  config.devShells = lib.mapAttrs (_: c: c.shell) config.dnvr.envs;
-  config.ups = lib.mapAttrs (_: c: c.up) config.dnvr.envs;
+  config.devShells = lib.mapAttrs (_: c: c.shell) config.dnvr.shells;
+  config.ups = lib.mapAttrs (_: c: c.up) config.dnvr.shells;
 }

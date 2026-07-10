@@ -111,7 +111,7 @@
   checkRefs = x:
     if refProblems == []
     then x
-    else throw "dnvr env '${name}': invalid dnvr:// refs:\n  - ${lib.concatStringsSep "\n  - " refProblems}";
+    else throw "dnvr shell '${name}': invalid dnvr:// refs:\n  - ${lib.concatStringsSep "\n  - " refProblems}";
   allScripts = lib.foldl' (a: p: a // p.scripts) {} processValues // config.scripts;
 
   scriptPkgs =

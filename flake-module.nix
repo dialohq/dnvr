@@ -52,19 +52,19 @@ in {
         lib = mkOption {
           type = types.raw;
           readOnly = true;
-          description = "Framework handle: `{ mkEnvs, mkScript, runners, presets, dnvrState }`.";
+          description = "Framework handle: `{ mkShells, mkScript, runners, presets, dnvrState }`.";
         };
 
-        envs = mkOption {
+        shells = mkOption {
           type = types.attrsOf (types.submoduleWith {
-            modules = [./env-module.nix];
+            modules = [./shell-module.nix];
             specialArgs = {
               inherit pkgs;
               inherit (framework) mkScript runners presets dnvrState;
             };
           });
           default = {};
-          description = "Envs declared modularly; one devShell per name.";
+          description = "Shells declared modularly; one devShell per name.";
         };
       };
 
@@ -76,23 +76,23 @@ in {
         dnvr.lib = framework;
 
         devShells =
-          (lib.mapAttrs (_: c: c.shell) config.dnvr.envs)
+          (lib.mapAttrs (_: c: c.shell) config.dnvr.shells)
           // (lib.optionalAttrs config.dnvr.picker.enable {
             "${config.dnvr.picker.name}" = import ./picker.nix {
               inherit pkgs lib;
-              names = lib.attrNames config.dnvr.envs;
+              names = lib.attrNames config.dnvr.shells;
             };
           });
 
         apps = lib.optionalAttrs config.dnvr.exposeApps (
-          lib.mapAttrs' (envName: c: {
-            name = "${envName}-up";
+          lib.mapAttrs' (shellName: c: {
+            name = "${shellName}-up";
             value = {
               type = "app";
               program = "${c.up}/bin/${envName}-up";
             };
           })
-          config.dnvr.envs
+          config.dnvr.shells
         );
       };
     });

@@ -7,7 +7,7 @@
 
     # Standalone entry point for non-flake-parts users:
     #   dnvr.lib.mkDnvr { inherit pkgs; }
-    # returns { mkEnvs, mkScript, runners, presets, dnvrState }.
+    # returns { mkShells, mkScript, runners, presets, dnvrState }.
     lib.mkDnvr = import ./.;
   };
 }

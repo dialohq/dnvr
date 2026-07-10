@@ -17,7 +17,7 @@
 
   allPresets = (import ./presets) // presets;
 
-  mkEnvs = userModules: let
+  mkShells = userModules: let
     result = lib.evalModules {
       modules = [./module.nix] ++ userModules;
       specialArgs = {
@@ -30,6 +30,6 @@
     config = result.config;
   };
 in {
-  inherit mkEnvs mkScript runners dnvrState;
+  inherit mkShells mkScript runners dnvrState;
   presets = allPresets;
 }

@@ -9,12 +9,12 @@ pkgs.writeShellApplication {
     # Per-process runtime state directory. Convention:
     #   $DNVR_STATE/runtime/<process>/<key>
     # Each process's wrapper has DNVR_RUNTIME_DIR pointing at its own dir
-    # (set by env-module.nix), so `set` and `get` (own-scope) need no
+    # (set by shell-module.nix), so `set` and `get` (own-scope) need no
     # process name. Cross-process reads use `get <proc>.<key>`.
 
     usage() {
       cat >&2 <<EOF
-    dnvr-state — runtime state for dnvr envs
+    dnvr-state — runtime state for dnvr shells
 
       dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
       dnvr-state get <proc>.<key>           read another process's value, fail if missing
