@@ -311,10 +311,6 @@
     '')
     knownProcs;
 
-  # Every pid path `dnvr up` cleans on exit.
-  pidFiles =
-    lib.concatMapStringsSep " " (n: ''"$DNVR_STATE/runtime/${n}/pid"'') knownProcs;
-
   # "api→pg" in listings when api consumes one of pg's keys.
   procLabel = n:
     if depGraph.${n} == []
@@ -438,10 +434,11 @@
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
     excludeShellChecks = ["SC2016"];
     text = ''
-      # label, pidfile -> one `dnvr ps` table row. `stopped`: no pid on
-      # record (group down, or process not launched). `exited`: a pid was
-      # recorded but the process is gone — a crash while the group is up
-      # (pids are cleaned when `dnvr up` exits normally).
+      # label, pidfile -> one `dnvr ps` table row. Liveness comes from
+      # kill -0, never from the file's presence: pid keys persist after the
+      # group exits (like every published key) until the next launch wipes
+      # them, so a recorded-but-dead pid reads `exited`; `stopped` means no
+      # pid since the last wipe.
       __dnvr_ps_row() {
         local pid="-" status="stopped"
         if [ -f "$2" ]; then
@@ -465,23 +462,7 @@
           ;;
         up)
           shift
-          # pid keys are bound to this invocation: written by each process
-          # as it starts, removed here by the EXIT trap, so they never
-          # outlive the group. That rules out exec'ing the runner (nothing
-          # would remain to clean up); it runs as a supervised child instead
-          # — same process group, so the TUI keeps the tty. INT/TERM forward
-          # to it, and because bash defers traps while a foreground command
-          # runs, it is backgrounded and wait'ed (same reasoning as in
-          # presets/postgres.nix).
-          trap 'rm -f ${pidFiles}' EXIT
-          "${name}-up" "$@" &
-          __dnvr_up_pid=$!
-          trap 'kill -TERM "$__dnvr_up_pid" 2>/dev/null || true' INT TERM
-          __dnvr_up_status=0
-          while kill -0 "$__dnvr_up_pid" 2>/dev/null; do
-            wait "$__dnvr_up_pid" && __dnvr_up_status=0 || __dnvr_up_status=$?
-          done
-          exit "$__dnvr_up_status"
+          exec "${name}-up" "$@"
           ;;
         ps)
           printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS

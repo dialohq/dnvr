@@ -189,9 +189,11 @@ own processes so consumers never read stale values; state published by
 another shell's running group is left alone.
 
 Every process also publishes its `pid` as it starts (`dnvr-state get
-pg.pid`). `dnvr ps` tabulates them: `running`, `stopped` (no pid on
-record), or `exited` (crashed while the group is up). Unlike discovery
-keys, pids never outlive the group — `dnvr up` removes them on exit.
+pg.pid`). `dnvr ps` tabulates them, checking liveness against the
+actual process — `running`, `exited` (pid on record, process gone), or
+`stopped` (no pid since the last launch) — so a stale file never reads
+as running. Like every published key, pids persist after the group
+exits and are wiped on the next launch.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at
