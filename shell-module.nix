@@ -195,14 +195,12 @@
 
   refEntryExports = lib.concatStrings (lib.mapAttrsToList entryResolveRef entryRefs);
 
-  # Wrap each process's command so DNVR_RUNTIME_DIR points at the per-process
-  # runtime/<procname> directory and dnvr-state is on PATH. Lets the inner
-  # command just say `dnvr-state set port 5432` without knowing its own name.
-  # dnvr:// env refs resolve here, before the exec: the wrapper blocks on
-  # `dnvr-state wait` until the producer publishes, then exports the value —
-  # so startup ordering falls out of data readiness, no depends_on needed.
-  # String commands normally pass through untouched, but a string command
-  # with refs gets the same wrapper (and thereby set -euo pipefail).
+  # Every process runs with DNVR_RUNTIME_DIR pointing at runtime/<procName>
+  # and dnvr-state on PATH, so `dnvr-state set` needs no self-identification.
+  # Derivation commands and commands with env refs become a store script
+  # (set -euo pipefail; refs resolve before the exec). Plain string commands
+  # get the same env via a string preamble instead — they keep the runner's
+  # sh semantics and are not shellchecked.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   wrapProcess = procName: p: let
@@ -227,7 +225,10 @@
           }
           '';
         }
-      else p.command;
+      else ''
+        export PATH=${dnvrState}/bin:"$PATH" DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
+        mkdir -p "$DNVR_RUNTIME_DIR"
+        ${p.command}'';
   in {
     command = wrapped;
     inherit (p) runner_settings;

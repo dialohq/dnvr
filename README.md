@@ -252,8 +252,9 @@ Semantics:
   `env.MIGRATIONS_DONE = "dnvr://migrations/done"` in the consumer. The
   consumer then waits for *completion*, not just startup.
 - A string `command` that carries refs is wrapped in a script (with
-  `set -euo pipefail`); string commands without refs pass to the runner
-  untouched, as before.
+  `set -euo pipefail`); string commands without refs keep their plain
+  sh semantics — they only gain the `DNVR_RUNTIME_DIR`/`dnvr-state`
+  preamble every process gets.
 
 ### Pluggable ref schemes
 

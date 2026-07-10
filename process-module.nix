@@ -9,9 +9,10 @@ in {
     command = mkOption {
       type = types.either types.package types.str;
       description = ''
-        What the runner executes. Derivations are wrapped so DNVR_RUNTIME_DIR
-        points at the per-process runtime dir and dnvr-state is on PATH;
-        strings pass through as-is.
+        What the runner executes: a derivation (exec'd via its main program)
+        or a shell command string. Either way the process runs with
+        DNVR_RUNTIME_DIR pointing at its per-process runtime dir and
+        dnvr-state on PATH.
       '';
     };
 
