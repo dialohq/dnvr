@@ -249,9 +249,10 @@ through untouched. Dependency edges come only from `dnvr://` refs.
 - `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
   per-process config from `runner_settings.<its-name>` by convention.
 - `dnvr.exposeApps` — wire `apps.<name>-up` (default `true`).
-- `dnvr.picker.enable` — a devshell (default name `"default"`, so plain
-  `nix develop`) that pops a `gum choose` TUI, writes `.envrc` for the chosen
-  env, and hands off to direnv.
+- `dnvr.picker.enable` — a devshell that pops a `gum choose` TUI over the
+  declared shells, writes `.envrc` for the chosen one, and hands off to
+  direnv. Exposed as `dnvr.picker.shellName` (default `"default"`, so plain
+  `nix develop` lands on it; set e.g. `"picker"` for `nix develop .#picker`).
 - `dnvr.lib` — read-only handle to the framework
   (`{mkShells, mkScript, runners, presets, dnvrState}`).
 

@@ -40,12 +40,12 @@ in {
           enable = mkOption {
             type = types.bool;
             default = false;
-            description = "Add a picker devshell: `nix develop .#<picker.name>` pops a `gum choose` TUI and eval's the chosen env in place. Single nix develop invocation, no re-exec.";
+            description = "Add a picker devshell: a `gum choose` TUI over the declared shells that writes `.envrc` for the chosen one and hands off to direnv.";
           };
-          name = mkOption {
+          shellName = mkOption {
             type = types.str;
             default = "default";
-            description = "Devshell name. Default \"default\" so plain `nix develop` lands on the picker.";
+            description = "devShell attr the picker is exposed as (`nix develop .#<shellName>`). Default \"default\" so plain `nix develop` lands on the picker; must not collide with a `dnvr.shells` name.";
           };
         };
 
@@ -78,10 +78,15 @@ in {
         devShells =
           (lib.mapAttrs (_: c: c.shell) config.dnvr.shells)
           // (lib.optionalAttrs config.dnvr.picker.enable {
-            "${config.dnvr.picker.name}" = import ./picker.nix {
-              inherit pkgs lib;
-              names = lib.attrNames config.dnvr.shells;
-            };
+            "${config.dnvr.picker.shellName}" =
+              if config.dnvr.shells ? ${config.dnvr.picker.shellName}
+              then
+                throw "dnvr: picker.shellName \"${config.dnvr.picker.shellName}\" collides with dnvr.shells.${config.dnvr.picker.shellName} — rename one of them"
+              else
+                import ./picker.nix {
+                  inherit pkgs lib;
+                  names = lib.attrNames config.dnvr.shells;
+                };
           });
 
         apps = lib.optionalAttrs config.dnvr.exposeApps (
