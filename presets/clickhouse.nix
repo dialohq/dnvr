@@ -20,7 +20,7 @@
   # Ports are resolved by clickhouse at startup via `from_env`. Default to
   # per-process env-var names; callers can override `httpPortEnv`/`tcpPortEnv`
   # to point at shared names like `CH_HTTP_PORT` for dynamic-port setups via
-  # the env's `prerun`.
+  # the shell's `prerun`.
   configXml = pkgs.writeText "${name}-clickhouse.xml" ''
     <?xml version="1.0"?>
     <clickhouse>
@@ -158,9 +158,9 @@ in {
 
     packages = [config.package];
 
-    # Set the port env vars statically when httpPort/tcpPort have values. The
-    # env-level `prerun` can override these by `export`ing the same names —
-    # process env wins over the env-level env map.
+    # Set the port env vars statically when httpPort/tcpPort have values.
+    # Shell-level `env` overrides these at eval (it merges over process
+    # env), and `prerun` exports override both at runtime.
     env =
       (lib.optionalAttrs (config.httpPort != null) {
         "${config.httpPortEnv}" = toString config.httpPort;
@@ -192,9 +192,8 @@ in {
           export ${config.tcpPortEnv}
         fi
 
-        # Publish discovery info before the server is *ready* — consumers
-        # that only need "where is it?" read these; `database` is published
-        # separately below, once the server answers queries.
+        # Discovery keys, published before the server is ready; `database`
+        # (the readiness key) follows once the server answers queries.
         dnvr-state set httpPort "''$${config.httpPortEnv}"
         dnvr-state set tcpPort  "''$${config.tcpPortEnv}"
         dnvr-state set host     "${hostAddr}"
@@ -221,9 +220,8 @@ in {
           wait $CH_PID 2>/dev/null || true
         ' EXIT INT TERM
 
-        # Wait until the server answers queries, ensure the configured
-        # database exists, then publish it. Consumers holding
-        # `dnvr://<name>/database` refs unblock here.
+        # Wait for readiness, ensure the configured database exists, then
+        # publish it — `dnvr://<name>/database` refs unblock only here.
         until clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
             --query "SELECT 1" >/dev/null 2>&1; do
           if ! kill -0 $CH_PID 2>/dev/null; then

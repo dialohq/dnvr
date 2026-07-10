@@ -1,5 +1,5 @@
 {
-  description = "dnvr — declarative dev environments for Nix flakes: processes, presets, and scripts as modules, one devShell per environment";
+  description = "dnvr — declarative dev environments for Nix flakes: processes, presets, and scripts as modules, one devShell per dnvr.shells entry";
 
   outputs = _: {
     # flake-parts module: import as `inputs.dnvr.flakeModule`.

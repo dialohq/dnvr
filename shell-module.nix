@@ -15,13 +15,8 @@
 
   processPackages = lib.concatMap (p: p.packages) processValues;
 
-  # env refs — an env value that is exactly `<scheme>://<rest>`, where
-  # <scheme> has an entry in `refHandlers`, is a reference: the handler's
-  # command resolves it at process start, and its stdout becomes the var.
-  # Whole-value refs only. Values whose scheme has no handler (https://…,
-  # postgres://…) pass through as plain env. The built-in dnvr:// handler
-  # reads another process's dnvr-state key (blocking until published), and
-  # dnvr refs double as the dependency graph (`config.dependencies`).
+  # An env value that is exactly `<scheme>://<rest>` for a scheme present
+  # in `refHandlers` is a ref; semantics live in the refHandlers option.
   matchUrl = v:
     if !(builtins.isString v)
     then null
@@ -43,9 +38,7 @@
     else u // {handler = config.refHandlers.${u.scheme};};
 
   # dnvr://<proc>/<key> — process names can't contain dots (dnvr-state
-  # splits `<proc>.<key>` on the first dot); keys can. To hand a consumer a
-  # composed value (a URL, a conn string), publish it composed from the
-  # producer.
+  # splits `<proc>.<key>` on the first dot); keys can.
   parseDnvrRef = v: let
     m = builtins.match "dnvr://([A-Za-z0-9_-]+)/([A-Za-z0-9._-]+)" v;
   in
@@ -274,11 +267,9 @@
     })
     allScripts;
 
-  # What `dnvr --list` offers — this is what <tab> completes and what
-  # --help shows: `up` first, then the scripts. The completers call
-  # `dnvr --list` at completion time, so one snippet in a shell config
-  # covers every env. `state` and `completions` still work as
-  # subcommands but stay out of both.
+  # What `dnvr --list` offers (and thereby what <tab> completes and what
+  # --help shows): `up` first, then the scripts. `state` and `completions`
+  # still work as subcommands but stay out of both.
   listRows =
     [
       {
@@ -638,7 +629,7 @@ in {
     runner = mkOption {
       type = types.functionTo types.package;
       default = runners.mprocs;
-      description = "Function `{name, processes, env}: drv` that produces the up-script.";
+      description = "Function `{name, processes, env, prerun}: drv` that produces the up-script.";
     };
 
     flags = mkOption {

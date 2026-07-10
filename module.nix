@@ -26,7 +26,7 @@
     ups = lib.mkOption {
       type = lib.types.attrsOf lib.types.package;
       readOnly = true;
-      description = "Per-env up-scripts, also available standalone (handy for `nix run`).";
+      description = "Per-shell up-scripts, as standalone derivations.";
     };
   };
 
