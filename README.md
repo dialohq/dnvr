@@ -82,6 +82,7 @@ Every devshell carries a `dnvr` command scoped to its shell:
 ```console
 $ dnvr --help     # everything in this shell: commands, descriptions
 $ dnvr up         # launch the process group
+$ dnvr ps         # process status: pid + liveness per process
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
@@ -186,6 +187,11 @@ $ dnvr-state dump                   # list everything published
 On every launch the runner wipes `$DNVR_STATE/runtime/<proc>` for its
 own processes so consumers never read stale values; state published by
 another shell's running group is left alone.
+
+Every process also publishes its `pid` as it starts (`dnvr-state get
+pg.pid`). `dnvr ps` tabulates them: `running`, `stopped` (no pid on
+record), or `exited` (crashed while the group is up). Unlike discovery
+keys, pids never outlive the group — `dnvr up` removes them on exit.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at

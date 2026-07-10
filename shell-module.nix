@@ -108,7 +108,7 @@
 
   # The dnvr CLI dispatches scripts after its built-in subcommands, so a
   # script by one of these names would exist but never be reachable.
-  reservedCliNames = ["up" "state" "completions" "help"];
+  reservedCliNames = ["up" "ps" "state" "completions" "help"];
 
   scriptProblems =
     map (n: "scripts.${n} shadows the built-in `dnvr ${n}` subcommand — pick another name")
@@ -205,6 +205,10 @@
   # (set -euo pipefail; refs resolve before the exec). Plain string commands
   # get the same env via a string preamble instead — they keep the runner's
   # sh semantics and are not shellchecked.
+  # Each path publishes `pid` before anything else (in the exec path $$
+  # survives the exec, so the key holds the final command's pid; elsewhere
+  # it is the supervising shell, whose lifetime tracks the command's).
+  # `dnvr ps` and `dnvr-state get <proc>.pid` read it.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   wrapProcess = procName: p: let
@@ -222,6 +226,7 @@
             : "''${DNVR_STATE:?DNVR_STATE must be set}"
             export DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
             mkdir -p "$DNVR_RUNTIME_DIR"
+            dnvr-state set pid "$$"
             ${resolveRefs}${
             if lib.isDerivation p.command
             then ''exec ${lib.getExe p.command} "$@"''
@@ -232,6 +237,7 @@
       else ''
         export PATH=${dnvrState}/bin:"$PATH" DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
         mkdir -p "$DNVR_RUNTIME_DIR"
+        dnvr-state set pid "$$"
         ${p.command}'';
   in {
     command = wrapped;
@@ -288,8 +294,26 @@
         name = "up";
         desc = "launch process group (${lib.concatStringsSep ", " (map procLabel (lib.attrNames wrappedProcesses))})";
       }
+      {
+        name = "ps";
+        desc = "process status (pid + liveness)";
+      }
     ]
     ++ scriptRows;
+
+  # Column width for `dnvr ps`: longest label, header included.
+  psWidth =
+    2 + lib.foldl' lib.max (lib.stringLength "PROCESS") (map lib.stringLength knownProcs);
+
+  psRows =
+    lib.concatMapStrings (n: ''
+      __dnvr_ps_row ${lib.escapeShellArg n} "$DNVR_STATE/runtime/${n}/pid"
+    '')
+    knownProcs;
+
+  # Every pid path `dnvr up` cleans on exit.
+  pidFiles =
+    lib.concatMapStringsSep " " (n: ''"$DNVR_STATE/runtime/${n}/pid"'') knownProcs;
 
   # "api→pg" in listings when api consumes one of pg's keys.
   procLabel = n:
@@ -414,6 +438,23 @@
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
     excludeShellChecks = ["SC2016"];
     text = ''
+      # label, pidfile -> one `dnvr ps` table row. `stopped`: no pid on
+      # record (group down, or process not launched). `exited`: a pid was
+      # recorded but the process is gone — a crash while the group is up
+      # (pids are cleaned when `dnvr up` exits normally).
+      __dnvr_ps_row() {
+        local pid="-" status="stopped"
+        if [ -f "$2" ]; then
+          read -r pid < "$2" || true
+          if kill -0 "$pid" 2>/dev/null; then
+            status=running
+          else
+            status=exited
+          fi
+        fi
+        printf '%-${toString psWidth}s %-8s %s\n' "$1" "$pid" "$status"
+      }
+
       cmd="''${1:-}"
       case "$cmd" in
         "" | --help | -h | help)
@@ -424,7 +465,27 @@
           ;;
         up)
           shift
-          exec "${name}-up" "$@"
+          # pid keys are bound to this invocation: written by each process
+          # as it starts, removed here by the EXIT trap, so they never
+          # outlive the group. That rules out exec'ing the runner (nothing
+          # would remain to clean up); it runs as a supervised child instead
+          # — same process group, so the TUI keeps the tty. INT/TERM forward
+          # to it, and because bash defers traps while a foreground command
+          # runs, it is backgrounded and wait'ed (same reasoning as in
+          # presets/postgres.nix).
+          trap 'rm -f ${pidFiles}' EXIT
+          "${name}-up" "$@" &
+          __dnvr_up_pid=$!
+          trap 'kill -TERM "$__dnvr_up_pid" 2>/dev/null || true' INT TERM
+          __dnvr_up_status=0
+          while kill -0 "$__dnvr_up_pid" 2>/dev/null; do
+            wait "$__dnvr_up_pid" && __dnvr_up_status=0 || __dnvr_up_status=$?
+          done
+          exit "$__dnvr_up_status"
+          ;;
+        ps)
+          printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS
+          ${psRows}
           ;;
         state)
           shift
