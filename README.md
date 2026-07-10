@@ -152,8 +152,9 @@ submodule):
 - `scripts.<name>` — `{text, runtimeInputs?, shell?, description?}` commands
   on the devshell PATH.
 - `env` — exported in the devshell and to every runner process. `$DNVR_ROOT`
-  in values expands at export time (see Static values below). Refs are
-  not allowed here; they belong on the process that consumes them.
+  in values expands at export time (see Static values below). Refs of
+  `inShell` schemes (op://) are allowed and resolve at shell entry only;
+  `dnvr://` refs belong on the process that consumes them.
 - `dependencies` — read-only: `process -> [dependencies]`, derived from
   `dnvr://` refs.
 - `prerun` — shell code run inside the up-script before the runner execs
@@ -265,21 +266,39 @@ dnvr.shells.backend = {
   refHandlers.op = {
     command = url: "op read ${lib.escapeShellArg url}";
     runtimeInputs = [pkgs._1password-cli];
+    cache.ttl = 3600; # don't shell out to op on every direnv load
   };
 
   processes.api.env = {
     PGHOST = "dnvr://pg/socketDir";
     STRIPE_KEY = "op://dev-vault/stripe/key";
   };
+
+  env.OPENAI_API_KEY = "op://dev-vault/openai/key"; # shell-only ref
 };
 ```
 
 A handler's `command` gets the whole ref value and returns a shell
-command whose stdout becomes the var. It runs in the process wrapper
-right before the command starts — refs resolve at process start, and
-nowhere else (a failing resolver aborts the process). Only whole-string
-values whose scheme has a handler are refs: `https://…` and friends pass
-through untouched. Dependency edges come only from `dnvr://` refs.
+command whose stdout becomes the var. Resolution happens twice:
+
+- **At process start** (authoritative): the wrapper resolves and exports
+  before the command runs; a failing resolver aborts the process.
+- **At devshell entry** (best-effort, `inShell = true` by default): the
+  same command runs in the shellHook so ad-hoc scripts see the values;
+  a failure warns on stderr and skips the export — it never blocks the
+  shell. The built-in dnvr handler sets `inShell = false`: its values
+  are runtime-published and would be absent or stale at entry. Refs in
+  the shell-level `env` are allowed for `inShell` schemes (entry-only,
+  never sent to the runner); `dnvr://` there is an eval error.
+
+`cache.ttl = <seconds>` caches resolved values as plaintext files under
+`$DNVR_STATE/ref-cache` (umask 077) — deliberately dev-grade; keep
+`.dnvr` gitignored. The cache serves both entry and process start;
+`dnvr state cache-clear` flushes it after rotating a secret.
+
+Only whole-string values whose scheme has a handler are refs:
+`https://…` and friends pass through untouched. Dependency edges come
+only from `dnvr://` refs.
 
 ## Top-level options
 
