@@ -105,9 +105,9 @@
       )
       processRefs)
     ++ lib.mapAttrsToList (
-      var: v: "env.${var} = \"${v}\": refs resolve at process start and never reach the devshell — move this to the consuming process's env, or read it live with `dnvr-state get`"
+      var: v: "env.${var} = \"${v}\": this scheme resolves only at process start (inShell = false) — move it to the consuming process's env, or read it live with `dnvr-state get`"
     )
-    envRefs
+    (lib.filterAttrs (_: v: !(parseRef v).handler.inShell) envRefs)
     ++ lib.optional (sorted ? cycle)
     "dependency cycle among processes: ${lib.concatStringsSep " -> " sorted.cycle} — each would wait for the other's key";
 
@@ -126,6 +126,75 @@
       })
     allScripts;
 
+  # Ref-cache plumbing shared by the process wrapper (hard-fail) and the
+  # devshell hook (best-effort). Cached values are plaintext files keyed by
+  # the ref URL — dev-grade by design; `dnvr state cache-clear` flushes.
+  refCacheDir = "$DNVR_STATE/ref-cache";
+  refCachePath = url: "${refCacheDir}/${builtins.hashString "sha256" url}";
+  refCacheFresh = url: ttl: ''[ -f "${refCachePath url}" ] && [ -n "$(${pkgs.findutils}/bin/find "${refCachePath url}" -newermt "${toString ttl} seconds ago" 2>/dev/null)" ]'';
+  refCacheWrite = var: url: ''
+    ${pkgs.coreutils}/bin/mkdir -p "${refCacheDir}"
+    (umask 077; printf '%s' "''$${var}" > "${refCachePath url}.tmp$$" && ${pkgs.coreutils}/bin/mv "${refCachePath url}.tmp$$" "${refCachePath url}")'';
+
+  # At process start resolution is authoritative: cache-fresh value or a
+  # live resolve; a resolver failure aborts the process (set -e).
+  procResolveRef = var: v: let
+    r = parseRef v;
+    ttl = r.handler.cache.ttl;
+  in
+    if ttl == null
+    then ''
+      ${var}="$( ${r.handler.command v} )"
+      export ${var}
+    ''
+    else ''
+      if ${refCacheFresh v ttl}; then
+        ${var}="$(${pkgs.coreutils}/bin/cat "${refCachePath v}")"
+      else
+        ${var}="$( ${r.handler.command v} )"
+        ${refCacheWrite var v}
+      fi
+      export ${var}
+    '';
+
+  # At shell entry resolution is best-effort: warn and skip on failure.
+  entryResolveRef = var: v: let
+    r = parseRef v;
+    ttl = r.handler.cache.ttl;
+    pathPrefix =
+      lib.optionalString (r.handler.runtimeInputs != [])
+      "PATH=${lib.makeBinPath r.handler.runtimeInputs}:$PATH ";
+    run = "${pathPrefix}${r.handler.command v}";
+    warn = ''echo "dnvr: could not resolve ${var} (${v})" >&2'';
+  in
+    if ttl == null
+    then ''
+      if ${var}="$( ${run} 2>/dev/null )"; then
+        export ${var}
+      else
+        ${warn}
+      fi
+    ''
+    else ''
+      if ${refCacheFresh v ttl}; then
+        export ${var}="$(${pkgs.coreutils}/bin/cat "${refCachePath v}")"
+      elif ${var}="$( ${run} 2>/dev/null )"; then
+        ${refCacheWrite var v}
+        export ${var}
+      else
+        ${warn}
+      fi
+    '';
+
+  # Everything with an inShell handler exports at entry: process refs (so
+  # ad-hoc scripts see the same values the process will) and shell-level
+  # refs (entry-only; they never reach the runner).
+  entryRefs =
+    lib.filterAttrs (_: v: (parseRef v).handler.inShell)
+    (lib.foldl' (a: r: a // r) {} (lib.attrValues processRefs) // envRefs);
+
+  refEntryExports = lib.concatStrings (lib.mapAttrsToList entryResolveRef entryRefs);
+
   # Wrap each process's command so DNVR_RUNTIME_DIR points at the per-process
   # runtime/<procname> directory and dnvr-state is on PATH. Lets the inner
   # command just say `dnvr-state set port 5432` without knowing its own name.
@@ -138,13 +207,7 @@
   # buckets (packages, env, scripts) must not leak into runner configs.
   wrapProcess = procName: p: let
     refs = processRefs.${procName};
-    resolveRefs = lib.concatStrings (lib.mapAttrsToList (var: v: let
-      r = parseRef v;
-    in ''
-      ${var}="$(${r.handler.command v})"
-      export ${var}
-    '')
-    refs);
+    resolveRefs = lib.concatStrings (lib.mapAttrsToList procResolveRef refs);
     handlerInputs =
       lib.unique (lib.concatMap (v: (parseRef v).handler.runtimeInputs) (lib.attrValues refs));
     wrapped =
@@ -487,9 +550,12 @@ in {
       type = types.attrsOf types.anything;
       default = {};
       description = ''
-        Env vars set on the devshell and exported to the runner. Refs
-        are not allowed here — they resolve at process start, so they
-        belong on the process that consumes them (eval error otherwise).
+        Env vars set on the devshell and exported to the runner. Refs of
+        schemes with `inShell = true` (e.g. op://) are allowed here: they
+        resolve best-effort at shell entry and never reach the runner.
+        Schemes with `inShell = false` (dnvr://) are an eval error here —
+        they resolve at process start, so they belong on the consuming
+        process.
       '';
     };
 
@@ -503,6 +569,27 @@ in {
               return a shell command whose stdout becomes the var. Runs in
               the process wrapper before the command starts; a failing
               resolver aborts the process.
+            '';
+          };
+          inShell = mkOption {
+            type = types.bool;
+            default = true;
+            description = ''
+              Also resolve refs of this scheme at devshell entry —
+              best-effort: a failure warns on stderr and skips the export,
+              never blocking the shell. The built-in dnvr handler disables
+              this; its values are runtime-published and would be absent or
+              stale at entry.
+            '';
+          };
+          cache.ttl = mkOption {
+            type = types.nullOr types.int;
+            default = null;
+            description = ''
+              Seconds a resolved value stays cached — a plaintext file under
+              `$DNVR_STATE/ref-cache` (written with umask 077), keyed by the
+              ref URL. Used at shell entry and process start alike. null
+              disables caching. Flush with `dnvr state cache-clear`.
             '';
           };
           runtimeInputs = mkOption {
@@ -577,6 +664,7 @@ in {
     command = url: let
       r = parseDnvrRef url;
     in "dnvr-state wait ${r.proc}.${r.key} --timeout 120";
+    inShell = false;
     runtimeInputs = [dnvrState];
   };
 
@@ -592,6 +680,7 @@ in {
         export DNVR_STATE="$DNVR_ROOT/.dnvr"
         mkdir -p "$DNVR_STATE"
         ${rootedEnvExports}
+        ${refEntryExports}
         export XDG_DATA_DIRS="${dnvrShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
         export FPATH="${dnvrShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"
         ${pkgs.coreutils}/bin/install -m 0644 ${nuCompletionFile} "$DNVR_STATE/dnvr-completions.nu"

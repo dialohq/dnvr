@@ -20,6 +20,7 @@ pkgs.writeShellApplication {
       dnvr-state get <proc>.<key>           read another process's value, fail if missing
       dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> exists (default 30s)
       dnvr-state pick-port                  echo a random free TCP port
+      dnvr-state cache-clear                wipe the ref-handler cache
       dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
 
     EOF
@@ -113,6 +114,10 @@ pkgs.writeShellApplication {
           echo "dnvr-state: $ref ready (''${elapsed}s)" >&2
         fi
         cat "$file"
+        ;;
+
+      cache-clear)
+        rm -rf "$DNVR_STATE/ref-cache"
         ;;
 
       pick-port)
