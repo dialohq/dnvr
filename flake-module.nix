@@ -30,12 +30,6 @@ in {
           description = "Custom process presets merged over the built-in `presets` registry.";
         };
 
-        exposeApps = mkOption {
-          type = types.bool;
-          default = true;
-          description = "Whether to wire each env's up-script as `apps.<name>-up`.";
-        };
-
         picker = {
           enable = mkOption {
             type = types.bool;
@@ -88,17 +82,6 @@ in {
                   names = lib.attrNames config.dnvr.shells;
                 };
           });
-
-        apps = lib.optionalAttrs config.dnvr.exposeApps (
-          lib.mapAttrs' (shellName: c: {
-            name = "${shellName}-up";
-            value = {
-              type = "app";
-              program = "${c.up}/bin/${shellName}-up";
-            };
-          })
-          config.dnvr.shells
-        );
       };
     });
   };

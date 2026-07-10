@@ -7,7 +7,6 @@ postgres/clickhouse), **scripts** (commands on the devshell PATH), and
 **env** vars. dnvr turns every `dnvr.shells.<name>` into:
 
 - `devShells.<name>` — enter with `nix develop .#<name>`
-- `apps.<name>-up` — launch the process group with `nix run .#<name>-up`
 
 Shells are isolated to `.dnvr/*` under the repo root, discover each
 other's runtime values (ports, socket dirs) through the bundled `dnvr-state`
@@ -65,7 +64,7 @@ Then:
 
 ```console
 $ nix develop .#backend   # shell with scripts, packages, env, banner
-$ nix run .#backend-up    # mprocs with pg + api panes
+$ dnvr up                 # inside the shell: mprocs with pg + api panes
 ```
 
 ## The `dnvr` CLI
@@ -306,7 +305,6 @@ only from `dnvr://` refs.
   over the built-ins; import them in any env via `processes.<proc>.imports`.
 - `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
   per-process config from `runner_settings.<its-name>` by convention.
-- `dnvr.exposeApps` — wire `apps.<name>-up` (default `true`).
 - `dnvr.picker.enable` — a devshell that pops a `gum choose` TUI over the
   declared shells, writes `.envrc` for the chosen one, and hands off to
   direnv. Exposed as `dnvr.picker.shellName` (default `"default"`, so plain
