@@ -178,24 +178,27 @@ discovery values through `dnvr-state`:
 
 ```console
 $ dnvr-state set port 5432          # publish to own scope
-$ dnvr-state get pg.socketDir       # read another process's value
+$ dnvr-state get pg.socketDir       # read a live value (fails if pg is down)
 $ dnvr-state wait pg.socketDir      # block until published (--timeout N)
 $ dnvr-state pick-port              # random free TCP port
 $ dnvr-state dump                   # list everything published
 ```
 
-On every launch the runner wipes `$DNVR_STATE/runtime/<proc>` for its
-own processes so consumers never read stale values; state published by
+On every launch the runner wipes each of its own processes' published
+keys so consumers never read stale values — the `pid` file is spared
+(its lock identity is what liveness reads) — and state published by
 another shell's running group is left alone.
 
 Every process writes its `pid` file as it starts and holds an
 exclusive `flock` on it for life — the kernel drops the lock on death,
 SIGKILL included. `dnvr ps` reads liveness from the lock, not the pid
 number, so a recycled pid can never read as running: `running`
-(locked), `exited` (pid on record, lock released), `stopped` (no pid
-on record since the last launch). Nothing needs to clean pid files up
-— the lock is the truth, and the next launch wipes them like every
-other runtime key. `dnvr-state get pg.pid` reads the value.
+(locked), `exited` (pid on record, lock released), `stopped` (never
+launched). pid files are never deleted; the lock is the truth. The
+same lock guards reads: `dnvr-state get` refuses a value whose
+producer is gone (`--stale-ok` overrides — completion sentinels are
+stale by design), while `wait` checks only existence, so `dnvr://`
+refs on sentinels from exited producers keep working.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at

@@ -4,7 +4,7 @@
 }:
 pkgs.writeShellApplication {
   name = "dnvr-state";
-  runtimeInputs = [pkgs.coreutils pkgs.python3];
+  runtimeInputs = [pkgs.coreutils pkgs.python3 pkgs.flock];
   text = ''
     # Per-process runtime state directory. Convention:
     #   $DNVR_STATE/runtime/<process>/<key>
@@ -17,7 +17,8 @@ pkgs.writeShellApplication {
     dnvr-state — runtime state for dnvr shells
 
       dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
-      dnvr-state get <proc>.<key>           read another process's value, fail if missing
+      dnvr-state get <proc>.<key> [--stale-ok]    read another process's value; fails if
+                                            missing or <proc> is no longer running
       dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> exists (default 30s)
       dnvr-state pick-port                  echo a random free TCP port
       dnvr-state cache-clear                wipe the ref-handler cache
@@ -58,17 +59,42 @@ pkgs.writeShellApplication {
         ;;
 
       get)
-        [ "$#" -eq 1 ] || usage
-        split_ref "$1"
+        stale_ok=false
+        ref=""
+        while [ "$#" -gt 0 ]; do
+          case "$1" in
+            --stale-ok) stale_ok=true ;;
+            *)
+              [ -z "$ref" ] || usage
+              ref="$1"
+              ;;
+          esac
+          shift
+        done
+        [ -n "$ref" ] || usage
+        split_ref "$ref"
         file="$RUNTIME/$svc/$key"
         if [ ! -f "$file" ]; then
-          echo "dnvr-state: $1 not published (no $file)" >&2
+          echo "dnvr-state: $ref not published (no $file)" >&2
           exit 1
+        fi
+        # A published value is only as live as its producer, which holds an
+        # exclusive flock on its pid file for life: a free (or absent) lock
+        # means the value is from a dead run.
+        if ! "$stale_ok"; then
+          pidfile="$RUNTIME/$svc/pid"
+          if [ ! -f "$pidfile" ] || flock -ns "$pidfile" true 2>/dev/null; then
+            echo "dnvr-state: $ref is stale — '$svc' is not running (--stale-ok reads it anyway)" >&2
+            exit 1
+          fi
         fi
         cat "$file"
         ;;
 
       wait)
+        # No liveness check here, deliberately: waiting on a completion
+        # sentinel (`set done 1` then exit) means the producer is gone by
+        # design when the value is consumed.
         [ "$#" -ge 1 ] || usage
         ref="$1"; shift
         timeout=30
