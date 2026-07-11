@@ -218,11 +218,10 @@
   # below spares it); the path's lock identity is the liveness source.
   # After winning the lock, the previous incarnation's keys are wiped so
   # a (re)started process never coexists with its old values — while the
-  # lock is held, every key present belongs to the current incarnation.
+  # lock is held, every key present belongs to the current incarnation,
+  # which is what lets `get` and `wait` treat lock + key as valid.
   # Claim-then-wipe ordering means a losing duplicate exits before
-  # touching the live instance's keys. The runner's `.launch` stamp is
-  # spared too: it marks launch freshness for `dnvr-state wait`, which
-  # protects the window before this wipe has run.
+  # touching the live instance's keys.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   claimPidFile = procName: ''
@@ -233,7 +232,7 @@
     }
     : > "$DNVR_RUNTIME_DIR/pid"
     printf '%s\n' "$$" >&9
-    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name .launch -exec ${pkgs.coreutils}/bin/rm -rf {} +
+    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid -exec ${pkgs.coreutils}/bin/rm -rf {} +
   '';
 
   wrapProcess = procName: p: let

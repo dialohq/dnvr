@@ -30,7 +30,7 @@
   });
 in
   runnerLib.mkUpScript {
-    inherit name processes env prerun;
+    inherit name env prerun;
     runtimeInputs = [pkgs.process-compose];
     # The log path is runtime-dependent ($DNVR_STATE), so it is patched into
     # a temp copy of the store config at launch.

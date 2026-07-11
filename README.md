@@ -179,31 +179,23 @@ discovery values through `dnvr-state`:
 ```console
 $ dnvr-state set port 5432          # publish to own scope
 $ dnvr-state get pg.socketDir       # read a live value (fails if pg is down)
-$ dnvr-state wait pg.socketDir      # block until published (--timeout N)
+$ dnvr-state wait pg.socketDir      # block until pg is up and it's published
 $ dnvr-state pick-port              # random free TCP port
 $ dnvr-state dump                   # list everything published
 ```
 
-Freshness is recorded, not inferred: before anything spawns, the
-runner touches a `.launch` stamp in each of its processes' state
-dirs, and `wait` accepts only keys at least as new as the stamp —
-yesterday's values can never satisfy today's waits, while a completion
-sentinel stays readable after its producer exits. Each process wipes
-its own keys as it claims its pid file, so a restarted process never
-coexists with its previous incarnation's values. Nothing else is
-deleted; another shell's running group is left alone.
-
-Every process writes its `pid` file as it starts and holds an
-exclusive `flock` on it for life — the kernel drops the lock on death,
-SIGKILL included. `dnvr ps` reads liveness from the lock, not the pid
-number, so a recycled pid can never read as running: `running`
-(locked), `exited` (pid on record, lock released), `stopped` (never
-launched). pid files are never deleted; the lock is the truth. The
-same lock guards reads: `get` returns live values only, refusing one
-whose producer is gone; `wait` succeeds on existence — a completion
-sentinel outlives its producer by design — but fails fast when the
-producer dies without publishing the key, instead of burning its
-timeout.
+**A key is stale if it is readable while its producer is not alive** —
+that one rule is the whole model. Every process holds an exclusive
+`flock` on its `pid` file for life (the kernel drops the lock on
+death, SIGKILL included) and wipes its own keys as it claims it, so
+lock held + key present always means the current incarnation's value.
+`get` and `wait` both require exactly that; `wait` simply blocks until
+it becomes true, riding out producer restarts, bounded by its timeout.
+`dnvr ps` reads the same lock — a recycled pid can never read as
+running: `running` (locked), `exited` (pid on record, lock released),
+`stopped` (never launched). Nothing else owns or deletes state — the
+up script just opens the viewer, and another shell's running group is
+never touched.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at
@@ -275,10 +267,13 @@ Semantics:
   tooling. Unknown targets, self-references, and cycles fail at eval time.
 - **Whole-value refs only.** To hand a consumer a composed value (a URL,
   a DSN), publish it already composed from the producer.
-- **Pure ordering deps** (migrations before api) need no special syntax:
-  publish a sentinel — `dnvr-state set done 1` in the producer,
-  `env.MIGRATIONS_DONE = "dnvr://migrations/done"` in the consumer. The
-  consumer then waits for *completion*, not just startup.
+- **Refs are for live values.** A value is readable only while its
+  producer runs, so run-to-completion ordering (migrations before api)
+  is not a ref concern: use the runner's native ordering
+  (`runner_settings."process-compose".depends_on` with
+  `process_completed_successfully`), and keep truly-once initialization
+  with the data it initializes (the postgres preset's `initialScript`
+  runs once per data dir).
 - A string `command` that carries refs is wrapped in a script (with
   `set -euo pipefail`); string commands without refs keep their plain
   sh semantics — they only gain the `DNVR_RUNTIME_DIR`/`dnvr-state`

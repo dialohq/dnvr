@@ -24,7 +24,7 @@
   });
 in
   runnerLib.mkUpScript {
-    inherit name processes env prerun;
+    inherit name env prerun;
     runtimeInputs = [pkgs.mprocs];
     # mprocs hardcodes its own diagnostic log to `mprocs.log` in the cwd
     # (flexi_logger FileSpec::default; no config/env override), so run it

@@ -19,9 +19,8 @@ pkgs.writeShellApplication {
       dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
       dnvr-state get <proc>.<key>           read a live value; fails if missing or
                                             <proc> is no longer running
-      dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> is published
-                                            for this launch (default 30s); fails fast
-                                            if <proc> dies without it
+      dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc> is alive and has
+                                            published <key> (default 30s)
       dnvr-state pick-port                  echo a random free TCP port
       dnvr-state cache-clear                wipe the ref-handler cache
       dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
@@ -68,26 +67,24 @@ pkgs.writeShellApplication {
           echo "dnvr-state: $1 not published (no $file)" >&2
           exit 1
         fi
-        # A published value is only as live as its producer, which holds an
-        # exclusive flock on its pid file for life: a free (or absent) lock
-        # means the value is from a dead run. Completion sentinels are read
-        # with `wait` (existence semantics); raw state with `dump`.
+        # A key is stale if it is readable while its producer is not
+        # alive; the producer holds an exclusive flock on its pid file
+        # for life, so a free (or absent) lock is the staleness test.
         pidfile="$RUNTIME/$svc/pid"
         if [ ! -f "$pidfile" ] || flock -ns "$pidfile" true 2>/dev/null; then
-          echo "dnvr-state: $1 is stale — '$svc' is not running (wait reads completion values; dump shows raw state)" >&2
+          echo "dnvr-state: $1 is stale — '$svc' is not running (dump shows raw state)" >&2
           exit 1
         fi
         cat "$file"
         ;;
 
       wait)
-        # Success needs no producer liveness — a completion sentinel
-        # (`set done 1`, then exit) outlives its producer by design;
-        # launch-freshness comes from the `.launch` stamp instead. A
-        # producer observed alive then dead with no current key will
-        # never publish it: fail fast instead of burning the timeout.
-        # Never-seen-alive means it just hasn't started yet — keep
-        # waiting.
+        # A value is valid only while its producer is alive: the wait is
+        # satisfied when the key exists AND the producer holds its
+        # pid-file lock. Claim-then-wipe at process start makes that pair
+        # always read the current incarnation's value. A dead producer's
+        # leftover key is stale by definition — keep waiting for the next
+        # incarnation, bounded by the timeout.
         [ "$#" -ge 1 ] || usage
         ref="$1"; shift
         timeout=30
@@ -103,16 +100,11 @@ pkgs.writeShellApplication {
         split_ref "$ref"
         file="$RUNTIME/$svc/$key"
         pidfile="$RUNTIME/$svc/pid"
-        stamp="$RUNTIME/$svc/.launch"
-        # Current = at least as new as the producer's `.launch` stamp
-        # (touched by the runner before anything spawns), so yesterday's
-        # keys never satisfy today's waits. No stamp (standalone use)
-        # accepts any existing key.
-        current() {
+        live() {
           [ -f "$file" ] || return 1
-          ! [ "$stamp" -nt "$file" ]
+          [ -f "$pidfile" ] || return 1
+          ! flock -ns "$pidfile" true 2>/dev/null
         }
-        seen_alive=false
         started=$(date +%s)
         deadline=$(( started + timeout ))
         # Only chatter if stderr is a tty — keeps process-compose logs and
@@ -121,19 +113,10 @@ pkgs.writeShellApplication {
         [ -t 2 ] && report=true
         next_report=$(( started + 1 ))
         first=true
-        while ! current; do
+        while ! live; do
           now=$(date +%s)
           if [ "$now" -ge "$deadline" ]; then
             echo "dnvr-state: timeout waiting $timeout s for $ref ($file)" >&2
-            exit 1
-          fi
-          if [ -f "$pidfile" ] && ! flock -ns "$pidfile" true 2>/dev/null; then
-            seen_alive=true
-          elif "$seen_alive"; then
-            # It may have published in its final instant — recheck before
-            # declaring the wait hopeless.
-            current && break
-            echo "dnvr-state: '$svc' exited without publishing $ref" >&2
             exit 1
           fi
           if "$report" && [ "$now" -ge "$next_report" ]; then
