@@ -70,6 +70,9 @@ pkgs.writeShellApplication {
         # A key is stale if it is readable while its producer is not
         # alive; the producer holds an exclusive flock on its pid file
         # for life, so a free (or absent) lock is the staleness test.
+        # Launches wipe leftover keys BEFORE taking the pid lock
+        # (serialized by launch.lock), so a key readable under a held
+        # lock always belongs to the live incarnation.
         pidfile="$RUNTIME/$svc/pid"
         if [ ! -f "$pidfile" ] || flock -ns "$pidfile" true 2>/dev/null; then
           echo "dnvr-state: $1 is stale — '$svc' is not running (dump shows raw state)" >&2
@@ -80,11 +83,13 @@ pkgs.writeShellApplication {
 
       wait)
         # A value is valid only while its producer is alive: the wait is
-        # satisfied when the key exists AND the producer holds its
-        # pid-file lock. Claim-then-wipe at process start makes that pair
-        # always read the current incarnation's value. A dead producer's
-        # leftover key is stale by definition — keep waiting for the next
-        # incarnation, bounded by the timeout.
+        # satisfied when the producer holds its pid-file lock and the key
+        # reads successfully. Launches wipe leftover keys before taking
+        # the lock, so a key readable under a held lock belongs to the
+        # current incarnation. The read is part of the liveness check —
+        # a key vanishing between check and read is a retry, not a
+        # result. A dead producer's leftover key is stale by definition —
+        # keep waiting for the next incarnation, bounded by the timeout.
         [ "$#" -ge 1 ] || usage
         ref="$1"; shift
         timeout=30
@@ -101,9 +106,9 @@ pkgs.writeShellApplication {
         file="$RUNTIME/$svc/$key"
         pidfile="$RUNTIME/$svc/pid"
         live() {
-          [ -f "$file" ] || return 1
           [ -f "$pidfile" ] || return 1
-          ! flock -ns "$pidfile" true 2>/dev/null
+          flock -ns "$pidfile" true 2>/dev/null && return 1
+          value=$(cat "$file" 2>/dev/null)
         }
         started=$(date +%s)
         deadline=$(( started + timeout ))
@@ -135,7 +140,7 @@ pkgs.writeShellApplication {
           elapsed=$(( $(date +%s) - started ))
           echo "dnvr-state: $ref ready (''${elapsed}s)" >&2
         fi
-        cat "$file"
+        printf '%s\n' "$value"
         ;;
 
       cache-clear)

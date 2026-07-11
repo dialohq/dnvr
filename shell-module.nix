@@ -205,26 +205,43 @@
   # (set -euo pipefail; refs resolve before the exec). Plain string commands
   # get the same env via a string preamble instead — they keep the runner's
   # sh semantics and are not shellchecked.
-  # Each path claims its pid file before anything else: open it on fd 9,
-  # take an exclusive flock (fds survive exec, so the lock lives exactly as
-  # long as the process — the kernel drops it on death, SIGKILL included),
-  # then write $$. `dnvr ps` and `dnvr-state get` read liveness from the
-  # lock, not the pid number, so a recycled pid can't masquerade as
-  # running; a duplicate launch of the same process fails fast on the held
-  # lock. Written in place, not via dnvr-state — its tmp+mv would detach
-  # the locked inode from the path — and opened O_APPEND, truncated only
-  # after the lock is won, so a losing duplicate can't clobber the live
-  # instance's recorded pid. Nothing ever unlinks the file (the wipe
-  # below spares it); the path's lock identity is the liveness source.
-  # After winning the lock, the previous incarnation's keys are wiped so
-  # a (re)started process never coexists with its old values — while the
-  # lock is held, every key present belongs to the current incarnation,
-  # which is what lets `get` and `wait` treat lock + key as valid.
-  # Claim-then-wipe ordering means a losing duplicate exits before
-  # touching the live instance's keys.
+  # Launching is probe → wipe → claim, made atomic by two locks in the
+  # runtime dir:
+  #
+  #   launch.lock — mutex over the launch sequence below, held only for
+  #     its few lines. Concurrent launchers serialize here, so the probe
+  #     can be trusted for the duration of the wipe and claim.
+  #   pid — the liveness source. The winner opens it on fd 9 and holds
+  #     an exclusive flock for life (fds survive exec; the kernel drops
+  #     the lock on death, SIGKILL included); its content is the live
+  #     pid. `dnvr ps` and `dnvr-state get/wait` read liveness from the
+  #     lock, never from the pid number, so a recycled pid can't
+  #     masquerade as running.
+  #
+  # Under launch.lock: a held pid lock means a live instance — fail fast
+  # without touching its state. A free pid lock proves any keys on disk
+  # are a dead incarnation's, so the wipe is safe; and because the wipe
+  # runs BEFORE the pid lock is taken, readers — which trust a key only
+  # under a held pid lock — can never observe a stale key as live: every
+  # key readable under a held lock was written by the current
+  # incarnation. The pid is written in place, not via dnvr-state — its
+  # tmp+mv would detach the locked inode from the path — and opened
+  # O_APPEND, truncated only after its lock is won. Nothing ever unlinks
+  # pid or launch.lock (the wipe spares them); path lock identity is the
+  # liveness source.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   claimPidFile = procName: ''
+    exec 8>>"$DNVR_RUNTIME_DIR/launch.lock"
+    flock -n 8 || {
+      echo "[${procName}] another launch is in progress" >&2
+      exit 1
+    }
+    if ! flock -ns "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null; then
+      echo "[${procName}] pid file is locked — already running?" >&2
+      exit 1
+    fi
+    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name launch.lock -exec ${pkgs.coreutils}/bin/rm -rf {} +
     exec 9>>"$DNVR_RUNTIME_DIR/pid"
     flock -n 9 || {
       echo "[${procName}] pid file is locked — already running?" >&2
@@ -232,7 +249,7 @@
     }
     : > "$DNVR_RUNTIME_DIR/pid"
     printf '%s\n' "$$" >&9
-    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid -exec ${pkgs.coreutils}/bin/rm -rf {} +
+    exec 8>&-
   '';
 
   wrapProcess = procName: p: let
