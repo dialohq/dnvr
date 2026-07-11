@@ -220,11 +220,16 @@ in {
 
         # Wait for readiness, ensure the configured databases exist, then
         # publish the readiness keys — `dnvr://<name>/database` (or
-        # url/socketUrl) refs unblock only here.
+        # url/socketUrl) refs unblock only here. The probe pins -d to the
+        # bootstrap db: without it libpq falls back to any inherited
+        # PGDATABASE (e.g. a shell-level convenience export propagated by
+        # the runner), which names a database that doesn't exist until the
+        # loop below creates it — pg_isready doesn't mind, but the server
+        # logs a FATAL failed-connection line for every fresh cluster.
         PGARGS=(-h "$DNVR_ROOT/${config.socketDir}" -p ${toString config.port} -U ${config.superuser})
         ${presetLib.untilReady {
         pid = "$PG_PID";
-        check = ''pg_isready -q "''${PGARGS[@]}"'';
+        check = ''pg_isready -q "''${PGARGS[@]}" -d postgres'';
         onDead = "[${name}] postgres exited before becoming ready";
       }}
         ${lib.concatMapStrings (db: ''
