@@ -129,8 +129,8 @@ its description (`state` and `completions` work but aren't completed).
 
 ## Module args
 
-The flake module injects these into `perSystem` (and into every `dnvr.shells.<name>`
-submodule):
+The flake module injects these into `perSystem` and — uniformly — into
+every `dnvr.shells.<name>` submodule, its processes, and its scripts:
 
 | arg | what it is |
 |---|---|
@@ -378,10 +378,16 @@ outputs = {nixpkgs, flake-utils, dnvr, ...}:
 Inline declarations work the same way — `dnvr.shells.<name> = { ... }`
 directly in the call. Shell modules get the same args as under
 flake-parts (`presets`, `runners`, `mkScript`, `dnvrState`), and
-`specialArgs = {inherit inputs;}` injects your own into every module
-level, shell and process submodules included (under flake-parts:
-`dnvr.specialArgs`). The picker is flake-parts-only. For full control,
-`dnvr.lib.mkDnvr {inherit pkgs;}` returns
+`specialArgs = {inherit inputs;}` injects your own alongside them at
+every module level — the imported file's head, shells, processes, and
+scripts alike. Reserved names (`name`, `pkgs`, `presets`, and the
+other framework/module-system args) are rejected with an error rather
+than silently shadowed. One portability note: under flake-parts the
+equivalent `dnvr.specialArgs` starts at the `dnvr.shells.<name>` level
+(the perSystem module's own args belong to flake-parts), so a module
+meant to move between both setups should destructure custom args in
+the shell module, not the file head. The picker is flake-parts-only.
+For full control, `dnvr.lib.mkDnvr {inherit pkgs;}` returns
 `{mkShells, mkScript, runners, presets, dnvrState}` (also takes
 `specialArgs`), where `mkShells [module1 module2]` returns
 `{devShells, ups, config}`.
