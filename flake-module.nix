@@ -24,6 +24,16 @@ in {
           description = "Additional runners merged into the built-in `runners` registry.";
         };
 
+        specialArgs = mkOption {
+          type = types.attrsOf types.raw;
+          default = {};
+          description = ''
+            Extra module args (e.g. `inputs`) injected into every
+            `dnvr.shells.<name>` submodule and their process/script
+            submodules.
+          '';
+        };
+
         presets = mkOption {
           type = types.attrsOf types.deferredModule;
           default = {};
@@ -52,10 +62,15 @@ in {
         shells = mkOption {
           type = types.attrsOf (types.submoduleWith {
             modules = [./shell-module.nix];
-            specialArgs = {
-              inherit pkgs;
-              inherit (framework) mkScript runners presets dnvrState;
-            };
+            specialArgs = let
+              allArgs =
+                {
+                  inherit pkgs;
+                  inherit (framework) mkScript runners presets dnvrState;
+                }
+                // config.dnvr.specialArgs;
+            in
+              allArgs // {dnvrSpecialArgs = allArgs;};
           });
           default = {};
           description = "Shells declared modularly; one devShell per name.";

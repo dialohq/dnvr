@@ -7,6 +7,7 @@
   runners,
   presets,
   dnvrState,
+  dnvrSpecialArgs,
   ...
 }: let
   inherit (lib) mkOption types;
@@ -512,7 +513,7 @@ in {
     scripts = mkOption {
       type = types.attrsOf (types.submoduleWith {
         modules = [./script-module.nix];
-        specialArgs = {inherit pkgs;};
+        specialArgs = dnvrSpecialArgs;
       });
       default = {};
       description = "Scripts exposed on the devshell's PATH.";
@@ -521,7 +522,7 @@ in {
     processes = mkOption {
       type = types.attrsOf (types.submoduleWith {
         modules = [./process-module.nix];
-        specialArgs = {inherit pkgs presets dnvrState;};
+        specialArgs = dnvrSpecialArgs // {inherit dnvrSpecialArgs;};
       });
       default = {};
       description = ''

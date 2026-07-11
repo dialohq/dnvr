@@ -7,11 +7,13 @@
 
     lib = {
       # Per-system devShells from a module: everything except `pkgs`,
-      # `presets`, and `extraRunners` is module config, so `imports` and
-      # `dnvr.shells.<name>` sit at the top level exactly as they do under
-      # flake-parts' perSystem:
+      # `presets`, `extraRunners`, and `specialArgs` is module config, so
+      # `imports` and `dnvr.shells.<name>` sit at the top level exactly as
+      # they do under flake-parts' perSystem. `specialArgs` injects extra
+      # module args (e.g. `inputs`) into every module level:
       #   devShells.<system> = dnvr.lib.mkDevShells {
       #     pkgs = nixpkgs.legacyPackages.<system>;
+      #     specialArgs = {inherit inputs;};
       #     imports = [./shells.nix];
       #   };
       mkDevShells = args:
@@ -19,7 +21,8 @@
             inherit (args) pkgs;
             presets = args.presets or {};
             extraRunners = args.extraRunners or {};
-          }).mkShells [(builtins.removeAttrs args ["pkgs" "presets" "extraRunners"])])
+            specialArgs = args.specialArgs or {};
+          }).mkShells [(builtins.removeAttrs args ["pkgs" "presets" "extraRunners" "specialArgs"])])
         .devShells;
 
       # Full handle for everything else:

@@ -3,6 +3,7 @@
   lib ? pkgs.lib,
   extraRunners ? {},
   presets ? {},
+  specialArgs ? {},
 }: let
   mkScript = import ./script.nix {inherit pkgs lib;};
 
@@ -18,12 +19,18 @@
   allPresets = (import ./presets) // presets;
 
   mkShells = userModules: let
-    result = lib.evalModules {
-      modules = [./module.nix] ++ userModules;
-      specialArgs = {
+    # User specialArgs reach every level: the top-level modules and — via
+    # dnvrSpecialArgs, threaded through the submoduleWith calls — shell,
+    # process, and script submodules.
+    allArgs =
+      {
         inherit pkgs mkScript runners dnvrState;
         presets = allPresets;
-      };
+      }
+      // specialArgs;
+    result = lib.evalModules {
+      modules = [./module.nix] ++ userModules;
+      specialArgs = allArgs // {dnvrSpecialArgs = allArgs;};
     };
   in {
     inherit (result.config) devShells ups;

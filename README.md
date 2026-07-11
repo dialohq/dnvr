@@ -318,6 +318,9 @@ plain value once a handler for it exists.
   over the built-ins; import them in any shell via `processes.<proc>.imports`.
 - `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
   per-process config from `runner_settings.<its-name>` by convention.
+- `dnvr.specialArgs` — extra module args (e.g. `{inherit inputs;}`)
+  injected into every `dnvr.shells.<name>` submodule and their
+  process/script submodules.
 - `dnvr.picker.enable` — a devshell that pops a `gum choose` TUI over the
   declared shells, writes `.envrc` for the chosen one, and hands off to
   direnv. Exposed as `dnvr.picker.shellName` (default `"default"`, so plain
@@ -327,10 +330,10 @@ plain value once a handler for it exists.
 
 ## Without flake-parts
 
-`dnvr.lib.mkDevShells` takes a module: everything except `pkgs` (and
-optional `presets`/`extraRunners` registries) is module config, so
-`imports` and `dnvr.shells.<name>` sit at the top level exactly as
-they do under flake-parts' `perSystem`. Plain flake:
+`dnvr.lib.mkDevShells` takes a module: everything except `pkgs`,
+`specialArgs`, and the optional `presets`/`extraRunners` registries is
+module config, so `imports` and `dnvr.shells.<name>` sit at the top
+level exactly as they do under flake-parts' `perSystem`. Plain flake:
 
 ```nix
 {
@@ -374,8 +377,11 @@ outputs = {nixpkgs, flake-utils, dnvr, ...}:
 
 Inline declarations work the same way — `dnvr.shells.<name> = { ... }`
 directly in the call. Shell modules get the same args as under
-flake-parts (`presets`, `runners`, `mkScript`, `dnvrState`). The
-picker is flake-parts-only. For full control,
+flake-parts (`presets`, `runners`, `mkScript`, `dnvrState`), and
+`specialArgs = {inherit inputs;}` injects your own into every module
+level, shell and process submodules included (under flake-parts:
+`dnvr.specialArgs`). The picker is flake-parts-only. For full control,
 `dnvr.lib.mkDnvr {inherit pkgs;}` returns
-`{mkShells, mkScript, runners, presets, dnvrState}`, where
-`mkShells [module1 module2]` returns `{devShells, ups, config}`.
+`{mkShells, mkScript, runners, presets, dnvrState}` (also takes
+`specialArgs`), where `mkShells [module1 module2]` returns
+`{devShells, ups, config}`.
