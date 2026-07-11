@@ -184,10 +184,14 @@ $ dnvr-state pick-port              # random free TCP port
 $ dnvr-state dump                   # list everything published
 ```
 
-On every launch the runner wipes each of its own processes' published
-keys so consumers never read stale values — the `pid` file is spared
-(its lock identity is what liveness reads) — and state published by
-another shell's running group is left alone.
+Freshness is recorded, not inferred: before anything spawns, the
+runner touches a `.launch` stamp in each of its processes' state
+dirs, and `wait` accepts only keys at least as new as the stamp —
+yesterday's values can never satisfy today's waits, while a completion
+sentinel stays readable after its producer exits. Each process wipes
+its own keys as it claims its pid file, so a restarted process never
+coexists with its previous incarnation's values. Nothing else is
+deleted; another shell's running group is left alone.
 
 Every process writes its `pid` file as it starts and holds an
 exclusive `flock` on it for life — the kernel drops the lock on death,

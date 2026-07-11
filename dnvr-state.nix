@@ -19,8 +19,9 @@ pkgs.writeShellApplication {
       dnvr-state set <key> <value>          publish to own scope (needs DNVR_RUNTIME_DIR)
       dnvr-state get <proc>.<key>           read a live value; fails if missing or
                                             <proc> is no longer running
-      dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> exists (default
-                                            30s); fails fast if <proc> dies without it
+      dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc>.<key> is published
+                                            for this launch (default 30s); fails fast
+                                            if <proc> dies without it
       dnvr-state pick-port                  echo a random free TCP port
       dnvr-state cache-clear                wipe the ref-handler cache
       dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
@@ -80,12 +81,13 @@ pkgs.writeShellApplication {
         ;;
 
       wait)
-        # Success is existence, not producer liveness — a completion
-        # sentinel (`set done 1`, then exit) outlives its producer by
-        # design. But a producer observed alive and then dead while the
-        # key is still missing will never publish it: fail fast instead
-        # of burning the timeout. Never-seen-alive means it just hasn't
-        # started yet — keep waiting.
+        # Success needs no producer liveness — a completion sentinel
+        # (`set done 1`, then exit) outlives its producer by design;
+        # launch-freshness comes from the `.launch` stamp instead. A
+        # producer observed alive then dead with no current key will
+        # never publish it: fail fast instead of burning the timeout.
+        # Never-seen-alive means it just hasn't started yet — keep
+        # waiting.
         [ "$#" -ge 1 ] || usage
         ref="$1"; shift
         timeout=30
@@ -101,6 +103,15 @@ pkgs.writeShellApplication {
         split_ref "$ref"
         file="$RUNTIME/$svc/$key"
         pidfile="$RUNTIME/$svc/pid"
+        stamp="$RUNTIME/$svc/.launch"
+        # Current = at least as new as the producer's `.launch` stamp
+        # (touched by the runner before anything spawns), so yesterday's
+        # keys never satisfy today's waits. No stamp (standalone use)
+        # accepts any existing key.
+        current() {
+          [ -f "$file" ] || return 1
+          ! [ "$stamp" -nt "$file" ]
+        }
         seen_alive=false
         started=$(date +%s)
         deadline=$(( started + timeout ))
@@ -110,7 +121,7 @@ pkgs.writeShellApplication {
         [ -t 2 ] && report=true
         next_report=$(( started + 1 ))
         first=true
-        while [ ! -f "$file" ]; do
+        while ! current; do
           now=$(date +%s)
           if [ "$now" -ge "$deadline" ]; then
             echo "dnvr-state: timeout waiting $timeout s for $ref ($file)" >&2
@@ -121,7 +132,7 @@ pkgs.writeShellApplication {
           elif "$seen_alive"; then
             # It may have published in its final instant — recheck before
             # declaring the wait hopeless.
-            [ -f "$file" ] && break
+            current && break
             echo "dnvr-state: '$svc' exited without publishing $ref" >&2
             exit 1
           fi

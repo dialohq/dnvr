@@ -32,21 +32,19 @@ in {
       lib.concatStringsSep "\n"
       (lib.mapAttrsToList exportLine env);
 
-    # Wipe this group's stale published keys from a previous launch, per
-    # process; consumers `dnvr-state wait` for fresh values, so a stale
-    # `pg-test.port` from yesterday would otherwise silently mislead them.
-    # $DNVR_STATE is shared by every shell in the repo — another group may
-    # be running, and its state is not ours to clear. The pid file is
-    # spared: its path identity carries the flock that `dnvr ps`, `get`,
-    # and the duplicate-launch guard read — unlinking it would detach a
-    # live instance's lock.
-    runtimeWipe =
+    # Stamp each process's state dir before anything spawns. `dnvr-state
+    # wait` accepts a key only if it is at least as new as this stamp, so
+    # yesterday's values can never satisfy today's waits — including
+    # completion sentinels, which stay readable after their producer
+    # exits precisely because their mtime beats the stamp. Nothing is
+    # deleted here: each process wipes its own keys when it claims its
+    # pid file, and $DNVR_STATE is shared by every shell in the repo —
+    # another group may be running, and its state is not ours to touch.
+    launchStamp =
       lib.concatMapStrings
       (n: ''
-        if [ -d "$DNVR_STATE/runtime/"${lib.escapeShellArg n} ]; then
-          ${pkgs.findutils}/bin/find "$DNVR_STATE/runtime/"${lib.escapeShellArg n} \
-            -mindepth 1 -maxdepth 1 ! -name pid -exec ${pkgs.coreutils}/bin/rm -rf {} +
-        fi
+        ${pkgs.coreutils}/bin/mkdir -p "$DNVR_STATE/runtime/"${lib.escapeShellArg n}
+        ${pkgs.coreutils}/bin/touch "$DNVR_STATE/runtime/"${lib.escapeShellArg n}/.launch
       '')
       (lib.attrNames processes);
 
@@ -61,7 +59,7 @@ in {
         ${rootGuard}
         ${envExports}
         mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
-        ${runtimeWipe}
+        ${launchStamp}
         ${prerun}
         ${exec}
       '';

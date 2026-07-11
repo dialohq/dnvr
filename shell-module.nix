@@ -214,8 +214,15 @@
   # lock. Written in place, not via dnvr-state — its tmp+mv would detach
   # the locked inode from the path — and opened O_APPEND, truncated only
   # after the lock is won, so a losing duplicate can't clobber the live
-  # instance's recorded pid. Nothing ever unlinks the file (the launch
-  # wipe spares it); the path's lock identity is the liveness source.
+  # instance's recorded pid. Nothing ever unlinks the file (the wipe
+  # below spares it); the path's lock identity is the liveness source.
+  # After winning the lock, the previous incarnation's keys are wiped so
+  # a (re)started process never coexists with its old values — while the
+  # lock is held, every key present belongs to the current incarnation.
+  # Claim-then-wipe ordering means a losing duplicate exits before
+  # touching the live instance's keys. The runner's `.launch` stamp is
+  # spared too: it marks launch freshness for `dnvr-state wait`, which
+  # protects the window before this wipe has run.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   claimPidFile = procName: ''
@@ -226,6 +233,7 @@
     }
     : > "$DNVR_RUNTIME_DIR/pid"
     printf '%s\n' "$$" >&9
+    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name .launch -exec ${pkgs.coreutils}/bin/rm -rf {} +
   '';
 
   wrapProcess = procName: p: let
