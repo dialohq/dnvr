@@ -32,15 +32,21 @@ in {
       lib.concatStringsSep "\n"
       (lib.mapAttrsToList exportLine env);
 
-    # Wipe only this group's stale runtime state from a previous launch;
-    # consumers `dnvr-state wait` for fresh values, so a stale `pg-test.port`
-    # from yesterday would otherwise silently mislead them. $DNVR_STATE is
-    # shared by every shell in the repo — another group may be running, and
-    # its published state is not ours to clear.
+    # Wipe this group's stale published keys from a previous launch, per
+    # process; consumers `dnvr-state wait` for fresh values, so a stale
+    # `pg-test.port` from yesterday would otherwise silently mislead them.
+    # $DNVR_STATE is shared by every shell in the repo — another group may
+    # be running, and its state is not ours to clear. The pid file is
+    # spared: its path identity carries the flock that `dnvr ps`, `get`,
+    # and the duplicate-launch guard read — unlinking it would detach a
+    # live instance's lock.
     runtimeWipe =
       lib.concatMapStrings
       (n: ''
-        ${pkgs.coreutils}/bin/rm -rf "$DNVR_STATE/runtime/"${lib.escapeShellArg n}
+        if [ -d "$DNVR_STATE/runtime/"${lib.escapeShellArg n} ]; then
+          ${pkgs.findutils}/bin/find "$DNVR_STATE/runtime/"${lib.escapeShellArg n} \
+            -mindepth 1 -maxdepth 1 ! -name pid -exec ${pkgs.coreutils}/bin/rm -rf {} +
+        fi
       '')
       (lib.attrNames processes);
 

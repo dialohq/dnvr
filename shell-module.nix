@@ -208,19 +208,23 @@
   # Each path claims its pid file before anything else: open it on fd 9,
   # take an exclusive flock (fds survive exec, so the lock lives exactly as
   # long as the process — the kernel drops it on death, SIGKILL included),
-  # then write $$. `dnvr ps` reads liveness from the lock, not the pid
-  # number, so a recycled pid can't masquerade as running; a duplicate
-  # launch of the same process fails fast on the held lock. The pid file
-  # is written in place, not via dnvr-state — its tmp+mv would detach the
-  # locked inode from the path.
+  # then write $$. `dnvr ps` and `dnvr-state get` read liveness from the
+  # lock, not the pid number, so a recycled pid can't masquerade as
+  # running; a duplicate launch of the same process fails fast on the held
+  # lock. Written in place, not via dnvr-state — its tmp+mv would detach
+  # the locked inode from the path — and opened O_APPEND, truncated only
+  # after the lock is won, so a losing duplicate can't clobber the live
+  # instance's recorded pid. Nothing ever unlinks the file (the launch
+  # wipe spares it); the path's lock identity is the liveness source.
   # The runner receives only {command, runner_settings} — the devshell-facing
   # buckets (packages, env, scripts) must not leak into runner configs.
   claimPidFile = procName: ''
-    exec 9>"$DNVR_RUNTIME_DIR/pid"
+    exec 9>>"$DNVR_RUNTIME_DIR/pid"
     flock -n 9 || {
       echo "[${procName}] pid file is locked — already running?" >&2
       exit 1
     }
+    : > "$DNVR_RUNTIME_DIR/pid"
     printf '%s\n' "$$" >&9
   '';
 
