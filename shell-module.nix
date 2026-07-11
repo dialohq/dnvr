@@ -606,7 +606,7 @@ in {
     processes = mkOption {
       type = types.attrsOf (types.submoduleWith {
         modules = [./process-module.nix];
-        specialArgs = dnvrSpecialArgs // {inherit dnvrSpecialArgs;};
+        specialArgs = dnvrSpecialArgs;
       });
       default = {};
       description = ''

@@ -8,7 +8,7 @@
     dnvr.shells = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submoduleWith {
         modules = [./shell-module.nix];
-        specialArgs = dnvrSpecialArgs // {inherit dnvrSpecialArgs;};
+        specialArgs = dnvrSpecialArgs;
       });
       default = {};
     };

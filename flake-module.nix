@@ -14,7 +14,7 @@ in {
     }: let
       framework = import ./. {
         inherit pkgs lib;
-        inherit (config.dnvr) extraRunners presets;
+        inherit (config.dnvr) extraRunners presets specialArgs;
       };
     in {
       options.dnvr = {
@@ -25,12 +25,16 @@ in {
         };
 
         specialArgs = mkOption {
-          type = types.attrsOf types.raw;
+          # lazyAttrsOf, like nixpkgs' _module.args: attrsOf forces values
+          # while module args are being built, so a value reaching into a
+          # shell's config would infinitely recurse.
+          type = types.lazyAttrsOf types.raw;
           default = {};
           description = ''
             Extra module args (e.g. `inputs`) injected into every
             `dnvr.shells.<name>` submodule and their process/script
-            submodules.
+            submodules. Names the module system or the framework provides
+            (`name`, `pkgs`, `presets`, …) are reserved and rejected.
           '';
         };
 
@@ -62,15 +66,10 @@ in {
         shells = mkOption {
           type = types.attrsOf (types.submoduleWith {
             modules = [./shell-module.nix];
-            specialArgs = let
-              allArgs =
-                {
-                  inherit pkgs;
-                  inherit (framework) mkScript runners presets dnvrState;
-                }
-                // config.dnvr.specialArgs;
-            in
-              allArgs // {dnvrSpecialArgs = allArgs;};
+            # The framework owns the composed arg set (merge order,
+            # reserved-name guard, self-reference); reusing it keeps this
+            # path and mkDevShells/mkDnvr from diverging.
+            specialArgs = framework.dnvrSpecialArgs;
           });
           default = {};
           description = "Shells declared modularly; one devShell per name.";
