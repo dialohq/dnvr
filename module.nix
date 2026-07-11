@@ -1,18 +1,14 @@
 {
   config,
   lib,
-  pkgs,
-  mkScript,
-  runners,
-  presets,
-  dnvrState,
+  dnvrSpecialArgs,
   ...
 }: {
   options = {
     dnvr.shells = lib.mkOption {
       type = lib.types.attrsOf (lib.types.submoduleWith {
         modules = [./shell-module.nix];
-        specialArgs = {inherit pkgs mkScript runners presets dnvrState;};
+        specialArgs = dnvrSpecialArgs // {inherit dnvrSpecialArgs;};
       });
       default = {};
     };
