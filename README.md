@@ -195,10 +195,11 @@ SIGKILL included. `dnvr ps` reads liveness from the lock, not the pid
 number, so a recycled pid can never read as running: `running`
 (locked), `exited` (pid on record, lock released), `stopped` (never
 launched). pid files are never deleted; the lock is the truth. The
-same lock guards reads: `dnvr-state get` refuses a value whose
-producer is gone (`--stale-ok` overrides — completion sentinels are
-stale by design), while `wait` checks only existence, so `dnvr://`
-refs on sentinels from exited producers keep working.
+same lock guards reads: `get` returns live values only, refusing one
+whose producer is gone; `wait` succeeds on existence — a completion
+sentinel outlives its producer by design — but fails fast when the
+producer dies without publishing the key, instead of burning its
+timeout.
 
 The built-in presets publish their full connection surface. postgres:
 `port`, `host`, `socketDir`, `dataDir`, `user`, `bootstrapDatabase` at
