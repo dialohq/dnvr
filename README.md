@@ -327,9 +327,55 @@ plain value once a handler for it exists.
 
 ## Without flake-parts
 
+`dnvr.lib.mkDevShells` takes a module: everything except `pkgs` (and
+optional `presets`/`extraRunners` registries) is module config, so
+`imports` and `dnvr.shells.<name>` sit at the top level exactly as
+they do under flake-parts' `perSystem`. Plain flake:
+
 ```nix
-dnvr.lib.mkDnvr {inherit pkgs;}
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    dnvr.url = "github:dialohq/dnvr";
+  };
+
+  outputs = {nixpkgs, dnvr, ...}: {
+    devShells.aarch64-darwin = dnvr.lib.mkDevShells {
+      pkgs = nixpkgs.legacyPackages.aarch64-darwin;
+      imports = [./shells.nix];
+    };
+  };
+}
 ```
 
-returns the same handle; `mkShells [module1 module2]` evaluates modules and
-returns `{devShells, ups, config}`.
+```nix
+# shells.nix — moves between this and flake-parts unchanged
+{presets, ...}: {
+  dnvr.shells.backend = {
+    processes.pg = {
+      imports = [presets.postgres];
+      database = "app";
+    };
+  };
+}
+```
+
+flake-utils, same call inside the loop:
+
+```nix
+outputs = {nixpkgs, flake-utils, dnvr, ...}:
+  flake-utils.lib.eachDefaultSystem (system: {
+    devShells = dnvr.lib.mkDevShells {
+      pkgs = nixpkgs.legacyPackages.${system};
+      imports = [./shells.nix];
+    };
+  });
+```
+
+Inline declarations work the same way — `dnvr.shells.<name> = { ... }`
+directly in the call. Shell modules get the same args as under
+flake-parts (`presets`, `runners`, `mkScript`, `dnvrState`). The
+picker is flake-parts-only. For full control,
+`dnvr.lib.mkDnvr {inherit pkgs;}` returns
+`{mkShells, mkScript, runners, presets, dnvrState}`, where
+`mkShells [module1 module2]` returns `{devShells, ups, config}`.
