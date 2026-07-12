@@ -435,10 +435,22 @@
   '';
 
   # Completion files in the standard discovery locations, wired up via
-  # XDG_DATA_DIRS/FPATH in the shellHook. bash-completion resolves
-  # XDG_DATA_DIRS lazily at first <tab>, so it works even when the env arrives
-  # via direnv; fish, zsh, and nushell (≥0.96 vendor autoload) read these
-  # paths at shell startup, covering any shell launched inside the devshell.
+  # XDG_DATA_DIRS and NIX_PROFILES in the shellHook. bash-completion resolves
+  # XDG_DATA_DIRS lazily at first <tab>, so it works even when the env
+  # arrives via direnv; fish and nushell (≥0.96 vendor autoload) read it at
+  # shell startup. zsh discovery rides NIX_PROFILES instead: nix-darwin's
+  # /etc/zshenv, NixOS, and home-manager's .zshrc all scan
+  # $profile/share/zsh/site-functions for every listed profile before
+  # compinit, with append semantics — so any nix-managed zsh started inside
+  # the devshell registers _dnvr automatically and nothing else changes.
+  #
+  # Deliberately NOT exported: FPATH. zsh imports an inherited FPATH verbatim
+  # as its entire fpath, dropping its compiled-in function directory — every
+  # autoload (compinit, add-zsh-hook, ...) then fails and the shell is
+  # unusable. And for a zsh already running when direnv applies the env it
+  # would do nothing anyway: compinit has already run, so a new completion
+  # file is never registered; that case is `dnvr completions zsh` (see
+  # README).
   dnvrShare = pkgs.linkFarm "dnvr-completions" [
     {
       name = "share/bash-completion/completions/dnvr";
@@ -746,7 +758,7 @@ in {
         ${rootedEnvExports}
         ${refEntryExports}
         export XDG_DATA_DIRS="${dnvrShare}/share''${XDG_DATA_DIRS:+:$XDG_DATA_DIRS}"
-        export FPATH="${dnvrShare}/share/zsh/site-functions''${FPATH:+:$FPATH}"
+        export NIX_PROFILES="''${NIX_PROFILES:+$NIX_PROFILES }${dnvrShare}"
         ${pkgs.coreutils}/bin/install -m 0644 ${nuCompletionFile} "$DNVR_STATE/dnvr-completions.nu"
         if [ -n "''${BASH_VERSION:-}" ] && [[ $- == *i* ]]; then
           eval "$(dnvr completions bash)"

@@ -91,21 +91,52 @@ $ dnvr state dump # dnvr-state passthrough
 
 Completion ships with the devshell — no per-user setup for most paths.
 Completion files sit in standard `share/` locations and the shellHook exports
-`XDG_DATA_DIRS`/`FPATH` pointing at them:
+`XDG_DATA_DIRS` and `NIX_PROFILES` pointing at them:
 
 - `nix develop .#<name>` (bash) — registered directly by the shellHook.
 - bash + bash-completion + direnv — bash-completion resolves `XDG_DATA_DIRS`
   lazily at first `<tab>`, so it picks dnvr up as soon as direnv loads the env.
-- any zsh/fish/nushell (≥0.96) **started inside** the devshell — they read
-  `FPATH`/`XDG_DATA_DIRS` at startup (nushell vendor-autoloads
+- any fish/nushell (≥0.96) **started inside** the devshell — they read
+  `XDG_DATA_DIRS` at startup (nushell vendor-autoloads
   `share/nushell/vendor/autoload/dnvr-completions.nu`).
+- any nix-managed zsh (nix-darwin, NixOS, home-manager) **started inside**
+  the devshell — their init scans `$profile/share/zsh/site-functions` for
+  every entry in `NIX_PROFILES` before `compinit`, and the shellHook appends
+  the completions root there. Append-only, so nothing else about the shell
+  changes. (Non-nix-managed zsh: add the same scan of `XDG_DATA_DIRS` to
+  `.zshrc` before `compinit`:
+  `for _d in ${(s.:.)XDG_DATA_DIRS}; fpath+=($_d/zsh/site-functions)`.)
 
-The one case that isn't automatic out of the box: a zsh/fish/nushell that was
-**already running** when direnv loaded the env — those shells computed their
-completion paths at startup. The shellHook materializes the nushell module at a
-stable path (`.dnvr/dnvr-completions.nu`), so nushell + direnv users make
-it automatic with a one-time hook next to their direnv integration (string
-hooks run in REPL scope, so they can load overlays):
+The devshell deliberately does **not** export `FPATH`: zsh imports an
+inherited `FPATH` verbatim as its entire `fpath` — dropping its own
+compiled-in function directory, which breaks `compinit` and every other
+autoload in any zsh started inside the devshell.
+
+The one case that isn't automatic out of the box: a shell that was **already
+running** when direnv loaded the env — it computed its completion paths at
+startup. This is a hard limit for zsh: `compinit` has already run, direnv can
+only export variables, and zsh has no lazy loader (bash only manages it
+because bash-completion ships one). Register on demand with
+
+```zsh
+eval "$(dnvr completions zsh)"
+```
+
+or automate it with a one-time `.zshrc` hook that fires when a dnvr shell
+appears on PATH:
+
+```zsh
+_dnvr_completion_hook() {
+  (( ${+_comps[dnvr]} )) && return
+  (( ${+commands[dnvr]} && ${+functions[compdef]} )) && eval "$(dnvr completions zsh)"
+}
+precmd_functions+=(_dnvr_completion_hook)
+```
+
+For nushell + direnv the shellHook materializes the completion module at a
+stable path (`.dnvr/dnvr-completions.nu`), so a one-time hook next to the
+direnv integration makes it automatic (string hooks run in REPL scope, so
+they can load overlays):
 
 ```nu
 $env.config.hooks.pre_prompt = ($env.config.hooks.pre_prompt? | default [] | append {
