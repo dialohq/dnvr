@@ -80,6 +80,13 @@ in {
       type = types.str;
       default = "postgres";
     };
+    runAsUser = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        OS account to create if missing and re-exec as if the launch is on Linux as a root user
+      '';
+    };
     settings = mkOption {
       type = types.attrsOf (types.oneOf [types.str types.int types.bool]);
       default = {};
@@ -131,6 +138,59 @@ in {
       if config.initialScript == null
       then null
       else pkgs.writeText "${name}-initial.sql" config.initialScript;
+
+    dropPrivs = pkgs.stdenv.hostPlatform.isLinux && config.runAsUser != null;
+
+    dropPrivsBlock = let
+      u = lib.escapeShellArg config.runAsUser;
+      dataDir = "$DNVR_ROOT/${config.dataDir}";
+    in ''
+      if [ "$(id -u)" = 0 ] && [ -z "''${DNVR_PG_DROPPED:-}" ]; then
+        if ! id -u ${u} >/dev/null 2>&1; then
+          echo "[${name}] creating system user ${config.runAsUser} ..."
+          useradd --system --user-group --shell ${pkgs.shadow}/bin/nologin ${u}
+        fi
+        __pg_uid="$(id -u ${u})"
+        __pg_gid="$(id -g ${u})"
+
+        mkdir -p "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
+        chown -R "$__pg_uid:$__pg_gid" \
+          "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
+
+        if [ -d "${dataDir}" ]; then
+          chown -R "$__pg_uid:$__pg_gid" "${dataDir}"
+          chmod 0700 "${dataDir}"
+        fi
+        __pg_parent="$(dirname "${dataDir}")"
+        if [ -d "$__pg_parent" ]; then
+          chown "$__pg_uid:$__pg_gid" "$__pg_parent"
+        else
+          install -d -o "$__pg_uid" -g "$__pg_gid" "$__pg_parent"
+        fi
+
+        if [ -n "''${DNVR_RUNTIME_DIR:-}" ]; then
+          chown "$__pg_uid:$__pg_gid" "$DNVR_RUNTIME_DIR"
+          find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 \
+            ! -name pid ! -name launch.lock \
+            -exec chown -R "$__pg_uid:$__pg_gid" {} +
+        fi
+
+        __pg_dir="$(dirname "${dataDir}")"
+        while [ "$__pg_dir" != / ] && [ "$__pg_dir" != . ]; do
+          chmod o+x "$__pg_dir" 2>/dev/null || true
+          __pg_dir="$(dirname "$__pg_dir")"
+        done
+
+        if [ ! -x "$0" ]; then
+          echo "[${name}] cannot re-exec as ${config.runAsUser}: \$0 ($0) is not executable" >&2
+          exit 1
+        fi
+        export DNVR_PG_DROPPED=1
+        echo "[${name}] dropping privileges to ${config.runAsUser} ..."
+        exec setpriv --reuid "$__pg_uid" --regid "$__pg_gid" \
+          --init-groups --inh-caps=-all -- "$0" "$@"
+      fi
+    '';
   in {
     socketPath = "$DNVR_ROOT/${config.socketDir}";
     dataPath = "$DNVR_ROOT/${config.dataDir}";
@@ -151,11 +211,13 @@ in {
 
     command = pkgs.writeShellApplication {
       name = "${name}-pg";
-      runtimeInputs = [postgresPkg pkgs.coreutils pkgs.fblog dnvrState];
+      runtimeInputs =
+        [postgresPkg pkgs.coreutils pkgs.fblog dnvrState]
+        ++ lib.optionals dropPrivs [pkgs.shadow pkgs.util-linux];
       text = ''
         set -e
         : "''${DNVR_ROOT:?DNVR_ROOT must be set}"
-        mkdir -p "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
+        ${lib.optionalString dropPrivs "${dropPrivsBlock}\n"}mkdir -p "$DNVR_ROOT/${config.socketDir}" "$DNVR_ROOT/${config.logDir}"
         if [ ! -d "$DNVR_ROOT/${config.dataDir}" ]; then
           echo "[${name}] initdb $DNVR_ROOT/${config.dataDir} ..."
           initdb -D "$DNVR_ROOT/${config.dataDir}" --username=${config.superuser} ${lib.escapeShellArgs config.initdbArgs}
