@@ -109,6 +109,14 @@ place without restarting the process panes.
   the snapshot, and `-f` follows the full-session archive.
 - Raw process output is also appended under `.dnvr/logs/tmux-<shell>-up/`.
 
+From the dnvr repository, the development fixture exposes the same CLI through
+`nix run`. Start its dashboard in one terminal, then query it from another:
+
+```console
+$ nix run --impure --expr 'import ./dev/tmux-ui.nix'
+$ nix run --impure --expr 'import ./dev/tmux-ui.nix' -- logs stream
+```
+
 ### Completion
 
 Completion ships with the devshell — no per-user setup for most paths.
@@ -221,6 +229,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   (dynamic port picking etc.; anything `export`ed flows to all processes).
 - `runner` — defaults to the persistent, reattachable `runners.tmux` sidebar
   viewer. It may be replaced by a custom `dnvr.extraRunners` entry.
+- `cli` — read-only shell-scoped `dnvr` CLI package.
 - `shellHook` — escape hatch.
 
 ## Runtime contract
