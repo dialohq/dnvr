@@ -112,7 +112,7 @@ pkgs.writeShellApplication {
         }
         started=$(date +%s)
         deadline=$(( started + timeout ))
-        # Only chatter if stderr is a tty — keeps process-compose logs and
+        # Only chatter if stderr is a tty — keeps non-interactive logs and
         # other non-interactive consumers clean.
         report=false
         [ -t 2 ] && report=true

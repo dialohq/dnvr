@@ -178,7 +178,7 @@ in {
 
         # Native postgres jsonlog → .dnvr/logs/<name>.json (what agents
         # tail). We also tail it through fblog to render a pretty stream on
-        # stdout for the human-facing mprocs pane. Postgres dies with the
+        # stdout for the human-facing process pane. Postgres dies with the
         # wrapper via the trap.
         LOG_JSON="$DNVR_ROOT/${config.logDir}/${name}.json"
         echo "[${name}] starting postgres on port ${toString config.port} ..."
