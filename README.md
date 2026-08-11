@@ -13,7 +13,8 @@ Shell state is confined to `.dnvr/*` under the repo root (nothing in
 Processes discover each other's runtime values (ports, socket dirs)
 through the bundled `dnvr-state` CLI — or declaratively via `dnvr://`
 env refs, which double as the process dependency graph — and run under
-a pluggable runner (`mprocs` by default, `process-compose` built in).
+a pluggable runner (`mprocs` by default; `tmux` and `process-compose` built
+in).
 
 ## Usage (flake-parts)
 
@@ -86,6 +87,31 @@ $ dnvr ps         # process status: pid + liveness per process
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
+
+### Persistent tmux runner
+
+For a sidebar-first viewer with native detach and reattach, select the tmux
+runner on a shell:
+
+```nix
+dnvr.shells.backend = {runners, ...}: {
+  runner = runners.tmux;
+  # processes = { ... };
+};
+```
+
+This does not put mprocs inside tmux. Every process command runs directly in
+its own tmux pane. The dashboard keeps a fixed process-list pane on the left
+and swaps the selected process into the pane on the right; background
+processes remain in detached tmux windows. The sidebar has no redraw timer and
+updates only for input or a process exit.
+
+- `j`/`k` selects a process and `Enter` opens it.
+- Clicking a process opens it; tmux mouse selection and log scrolling work.
+- `Ctrl-A` returns focus to the sidebar; `Ctrl-G` detaches cleanly.
+- `r` restarts and `x` interrupts the selected process; `Q` stops the group.
+- Running `dnvr up` again reattaches to the existing session.
+- Process output is also appended under `.dnvr/logs/tmux-<shell>/`.
 
 ### Completion
 
@@ -167,7 +193,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
 | arg | what it is |
 |---|---|
 | `presets` | Built-in process presets (`postgres`, `clickhouse`) plus `dnvr.presets`. |
-| `runners` | Up-script builders (`mprocs`, `process-compose`) plus `dnvr.extraRunners`. |
+| `runners` | Up-script builders (`mprocs`, `tmux`, `process-compose`) plus `dnvr.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
 
@@ -198,7 +224,8 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   `dnvr://` refs.
 - `prerun` — shell code run inside the up-script before the runner execs
   (dynamic port picking etc.; anything `export`ed flows to all processes).
-- `runner` — defaults to `runners.mprocs`.
+- `runner` — defaults to `runners.mprocs`; use `runners.tmux` for a persistent,
+  reattachable sidebar viewer.
 - `shellHook` — escape hatch.
 
 ## Runtime contract
