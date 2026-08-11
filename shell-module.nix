@@ -844,6 +844,12 @@ in {
       readOnly = true;
       description = "The runner up-script as a standalone derivation.";
     };
+
+    cli = mkOption {
+      type = types.package;
+      readOnly = true;
+      description = "The shell-scoped dnvr CLI package.";
+    };
   };
 
   config.refHandlers.dnvr = {
@@ -858,9 +864,11 @@ in {
 
   config.up = checkProblems upScript;
 
+  config.cli = checkProblems dnvrCli;
+
   config.shell = checkProblems (pkgs.mkShell ({
       name = "dnvr-${name}";
-      packages = config.packages ++ processPackages ++ scriptPkgs ++ [dnvrState dnvrCli];
+      packages = config.packages ++ processPackages ++ scriptPkgs ++ [dnvrState config.cli];
       shellHook = ''
         export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
         export DNVR_STATE="$DNVR_ROOT/.dnvr"
