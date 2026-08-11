@@ -54,33 +54,43 @@
       ${pkgs.coreutils}/bin/touch "$__ready"
     '') processNames);
 
-  configureSession = ''
-    tmux -S "$__socket" set-option -g status off
-    tmux -S "$__socket" set-option -g remain-on-exit on
-    tmux -S "$__socket" set-option -g mouse on
+  tmuxConfig = pkgs.writeText "dnvr-tmux.conf" ''
+    set-option -g status off
+    set-option -g remain-on-exit on
+    set-option -g mouse on
     # Agent-facing `dnvr logs` reads the complete retained pane history.
-    tmux -S "$__socket" set-option -g history-limit 100000
-    tmux -S "$__socket" set-option -g pane-border-status top
-    tmux -S "$__socket" set-option -g pane-border-indicators off
-    tmux -S "$__socket" set-option -g pane-border-format \
+    set-option -g history-limit 100000
+    set-option -g pane-border-status top
+    set-option -g pane-border-indicators off
+    set-option -g pane-border-format \
       '#{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
-    tmux -S "$__socket" set-option -g pane-border-style fg=colour238
-    tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
-    tmux -S "$__socket" set-window-option -g window-size latest
-    tmux -S "$__socket" set-window-option -g main-pane-width 30
-    tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
-    tmux -S "$__socket" set-option -s escape-time 0
-    tmux -S "$__socket" set-option -g prefix None
-    tmux -S "$__socket" set-option -g prefix2 None
-    tmux -S "$__socket" bind-key -n C-g detach-client
-    tmux -S "$__socket" bind-key -n C-a \
-      "select-pane -t '$__sidebar' ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-    tmux -S "$__socket" set-hook -g pane-died \
-      "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-    tmux -S "$__socket" set-hook -g client-attached \
-      "select-layout -t '=$__session:dashboard' main-vertical ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-    tmux -S "$__socket" set-hook -g client-resized \
-      "select-layout -t '=$__session:dashboard' main-vertical"
+    set-option -g pane-border-style fg=colour238
+    set-option -g pane-active-border-style fg=colour238
+    set-window-option -g window-size latest
+    set-window-option -g main-pane-width 30
+    set-option -g default-shell ${pkgs.bash}/bin/bash
+    set-option -s escape-time 0
+    set-option -g prefix None
+    set-option -g prefix2 None
+
+    bind-key -n C-g detach-client
+    bind-key -n C-a select-pane -t '#{@dnvr_sidebar}' \; \
+      run-shell '${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}'
+
+    set-hook -g pane-died \
+      'run-shell "${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}"'
+    set-hook -g client-attached \
+      'select-layout -t "=dnvr:dashboard" main-vertical ; run-shell "${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}"'
+    set-hook -g client-resized \
+      'select-layout -t "=dnvr:dashboard" main-vertical'
+  '';
+
+  configureSession = ''
+    # Runtime identities are the only imperative configuration. The config
+    # resolves these user options when a binding or hook actually fires.
+    tmux -S "$__socket" set-option -g @dnvr_sidebar "$__sidebar"
+    tmux -S "$__socket" set-option -g @dnvr_sidebar_pid "$__sidebar_pid"
+    tmux -S "$__socket" source-file ${tmuxConfig}
   '';
 in
   runnerLib.mkUpScript {
@@ -148,7 +158,7 @@ in
         __cols=80
       fi
 
-      tmux -S "$__socket" -f /dev/null new-session -d \
+      tmux -S "$__socket" -f ${tmuxConfig} new-session -d \
         -x "$__cols" -y "$__rows" -s "$__session" -n dashboard \
         ${sidebar}/bin/dnvr-tmux-sidebar
       __sidebar=$(tmux -S "$__socket" display-message -p \
