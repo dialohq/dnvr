@@ -106,7 +106,8 @@ and swaps the selected process into the pane on the right; background
 processes remain in detached tmux windows. The sidebar has no redraw timer and
 updates only for input or a process exit.
 
-- `j`/`k` selects a process and `Enter` opens it.
+- `j`/`k` moves the selection. `Enter` first shows that process and a second
+  `Enter` enters its pane; `●` means shown and `▶` means interactive.
 - Clicking a process opens it; tmux mouse selection and log scrolling work.
 - `Ctrl-A` returns focus to the sidebar; `Ctrl-G` detaches cleanly.
 - `r` restarts and `x` interrupts the selected process; `Q` stops the group.

@@ -62,11 +62,23 @@
             tmux swap-pane -d -s "$target" -t "$current"
           else
             tmux join-pane -h -s "$target" -t "$sidebar_pane"
-            tmux resize-pane -t "$sidebar_pane" -x 28
+            tmux resize-pane -t "$sidebar_pane" -x 30
           fi
         fi
         if [[ "$focus_target" == true ]]; then
           tmux select-pane -t "$target"
+        fi
+      }
+
+      activate_selected() {
+        local target current
+        target=$(selected_pane)
+        [[ -n "$target" ]] || return 0
+        current=$(visible_pane)
+        if [[ "$current" == "$target" ]]; then
+          tmux select-pane -t "$target"
+        else
+          show_selected false
         fi
       }
 
@@ -80,8 +92,8 @@
         done
         if [[ "$sequence" =~ ^\[\<0\;[0-9]+\;([0-9]+)M$ ]]; then
           row="''${BASH_REMATCH[1]}"
-          if (( row >= 3 && row < count + 3 )); then
-            selected=$((row - 3))
+          if (( row >= 1 && row <= count )); then
+            selected=$((row - 1))
             show_selected false
             return 0
           fi
@@ -90,49 +102,108 @@
       }
 
       render() {
-        local i row pane proc dead current marker status style reset
+        local i row pane proc dead current current_active marker status style reset height footer_row rendered old footer_hint
+        local -a next_lines=()
         current=$(visible_pane)
-        printf '\033[H\033[2J\033[1m Processes\033[0m\n\n'
+        current_active=0
+        if [[ -n "$current" ]]; then
+          current_active=$(tmux display-message -p -t "$current" '#{pane_active}')
+        fi
+        height=$(tmux display-message -p -t "$sidebar_pane" '#{pane_height}')
+        for ((i = 0; i < height; i++)); do
+          next_lines[i]=""
+        done
         for ((i = 0; i < count; i++)); do
           row="''${rows[$i]}"
           pane=$(field "$row" 2)
           proc=$(field "$row" 3)
           dead=$(field "$row" 4)
           marker=' '
-          [[ "$pane" == "$current" ]] && marker='●'
           status='UP'
           style='\033[32m'
+          if [[ "$pane" == "$current" ]]; then
+            marker='●'
+            if [[ "$current_active" == 1 ]]; then
+              marker='▶'
+            fi
+          fi
           if [[ "$dead" == 1 ]]; then
             status='DOWN'
             style='\033[31m'
           fi
           reset='\033[0m'
           if (( i == selected )); then
-            printf '\033[7m%s %-16.16s %b%4s%b\033[0m\n' \
-              "$marker" "$proc" "$style" "$status" "$reset"
+            printf -v rendered '\033[7m%s %-16.16s %b%4s\033[39m\033[K\033[0m' \
+              "$marker" "$proc" "$style" "$status"
           else
-            printf '%s %-16.16s %b%4s%b\n' \
+            printf -v rendered '%s %-16.16s %b%4s%b' \
               "$marker" "$proc" "$style" "$status" "$reset"
           fi
+          if (( i < height )); then
+            next_lines[i]="$rendered"
+          fi
         done
-        printf '\n \033[2mj/k select  enter open\n r restart   x interrupt\n C-a sidebar C-g detach\n Q stop all\033[0m'
+        footer_row=$((height - 3))
+        if (( footer_row <= count + 1 )); then
+          footer_row=$((count + 2))
+        fi
+        footer_hint='j/k move    enter view'
+        if [[ "$(selected_pane)" == "$current" ]]; then
+          footer_hint='j/k move    enter interact'
+        fi
+        if [[ "$current_active" == 1 ]]; then
+          footer_hint='process active  C-a sidebar'
+        fi
+        if (( footer_row <= height )); then
+          printf -v rendered '\033[2m%s\033[0m' "$footer_hint"
+          next_lines[footer_row - 1]="$rendered"
+        fi
+        if (( footer_row + 1 <= height )); then
+          next_lines[footer_row]=$'\033[2m r restart   x interrupt\033[0m'
+        fi
+        if (( footer_row + 2 <= height )); then
+          next_lines[footer_row + 1]=$'\033[2m C-a sidebar C-g detach\033[0m'
+        fi
+        if (( footer_row + 3 <= height )); then
+          next_lines[footer_row + 2]=$'\033[2m Q stop all\033[0m'
+        fi
+
+        # tmux already diffs the composed terminal. Avoid invalidating the
+        # whole sidebar before it gets there: update only rows whose rendered
+        # contents actually changed.
+        for ((i = 0; i < height; i++)); do
+          old="''${screen_lines[i]-}"
+          if [[ "$old" != "''${next_lines[i]}" ]]; then
+            printf '\033[%d;1H%s\033[K' "$((i + 1))" "''${next_lines[i]}"
+          fi
+        done
+        screen_lines=("''${next_lines[@]}")
       }
 
       # Ask tmux to forward left-click events using the unambiguous SGR form.
       saved_stty=$(stty -g)
       stty -echo
-      printf '\033[?1000h\033[?1006h'
+      printf '\033[?1000h\033[?1006h\033[?25l'
       cleanup() {
         stty "$saved_stty"
-        printf '\033[?1000l\033[?1006l'
+        printf '\033[?1000l\033[?1006l\033[?25h'
       }
       trap cleanup EXIT
+      request_refresh() {
+        load_processes
+        render
+      }
+      trap request_refresh USR1
+      tmux set-option -p -t "$sidebar_pane" @dnvr_sidebar_pid "$BASHPID"
 
       # The sidebar is deliberately event-driven: no timer means no idle
       # redraws competing with process output. Only state-changing input and
-      # pane-died (which sends C-l) repaint it.
+      # explicit tmux lifecycle signals repaint it.
+      screen_lines=()
+      printf '\033[H\033[2J'
       load_processes
       render
+      tmux set-option -p -t "$sidebar_pane" @dnvr_ready 1
       while true; do
         key=""
         if IFS= read -rsn1 key; then
@@ -151,7 +222,7 @@
               fi
               ;;
             "")
-              show_selected
+              activate_selected
               redraw=true
               ;;
             r)
@@ -216,13 +287,42 @@ in
       __proc_logs="$DNVR_STATE/logs/tmux-${name}"
       mkdir -p "$__proc_logs"
 
+      # A detached tmux server otherwise starts at 80x24 and proportionally
+      # stretches that layout when the first real client attaches. Seed it
+      # with the invoking terminal's dimensions so the fixed sidebar is right
+      # from the first frame, not corrected one frame later.
+      if ! read -r __rows __cols < <(${pkgs.coreutils}/bin/stty size 2>/dev/null); then
+        __rows=24
+        __cols=80
+      fi
+      if (( __rows < 2 || __cols < 32 )); then
+        __rows=24
+        __cols=80
+      fi
+
       tmux -S "$__socket" -f /dev/null new-session -d \
-        -s "$__session" -n dashboard \
+        -x "$__cols" -y "$__rows" -s "$__session" -n dashboard \
         ${sidebar}/bin/dnvr-tmux-sidebar-${name}
       __sidebar=$(tmux -S "$__socket" display-message -p \
         -t "=$__session:dashboard.0" '#{pane_id}')
       tmux -S "$__socket" set-option -p -t "$__sidebar" @dnvr_role sidebar
       tmux -S "$__socket" set-option -p -t "$__sidebar" @dnvr_name Processes
+
+      __sidebar_ready=false
+      for ((i = 0; i < 100; i++)); do
+        if [[ "$(tmux -S "$__socket" display-message -p -t "$__sidebar" '#{@dnvr_ready}')" == 1 ]]; then
+          __sidebar_ready=true
+          break
+        fi
+        ${pkgs.coreutils}/bin/sleep 0.01
+      done
+      if [[ "$__sidebar_ready" != true ]]; then
+        echo "dnvr: tmux sidebar did not become ready" >&2
+        tmux -S "$__socket" kill-session -t "=$__session"
+        exit 1
+      fi
+      __sidebar_pid=$(tmux -S "$__socket" display-message -p \
+        -t "$__sidebar" '#{@dnvr_sidebar_pid}')
 
       tmux -S "$__socket" set-option -g status off
       tmux -S "$__socket" set-option -g remain-on-exit on
@@ -232,13 +332,19 @@ in
         ' #{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}} '
       tmux -S "$__socket" set-option -g pane-active-border-style fg=cyan
       tmux -S "$__socket" set-option -g pane-border-style fg=colour238
+      tmux -S "$__socket" set-window-option -g window-size latest
       tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
       tmux -S "$__socket" set-option -s escape-time 0
       tmux -S "$__socket" unbind-key C-b
       tmux -S "$__socket" bind-key -n C-g detach-client
-      tmux -S "$__socket" bind-key -n C-a select-pane -t "$__sidebar"
+      tmux -S "$__socket" bind-key -n C-a \
+        "select-pane -t '$__sidebar' ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
       tmux -S "$__socket" set-hook -g pane-died \
-        "send-keys -t '$__sidebar' C-l"
+        "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+      tmux -S "$__socket" set-hook -g client-attached \
+        "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+      tmux -S "$__socket" set-hook -g client-resized \
+        "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
 
       ${launchProcesses}
 
@@ -250,7 +356,7 @@ in
         | ${pkgs.coreutils}/bin/cut -f2)
       if [[ -n "$__first" ]]; then
         tmux -S "$__socket" join-pane -h -s "$__first" -t "$__sidebar"
-        tmux -S "$__socket" resize-pane -t "$__sidebar" -x 28
+        tmux -S "$__socket" resize-pane -t "$__sidebar" -x 30
       fi
       tmux -S "$__socket" select-pane -t "$__sidebar"
       exec tmux -S "$__socket" attach-session -t "=$__session"
