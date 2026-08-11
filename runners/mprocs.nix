@@ -31,7 +31,10 @@ in
     # from the logs dir to keep it out of the project root. Every process
     # sets its own cwd via $DNVR_ROOT, so mprocs' cwd doesn't affect them.
     exec = ''
+      __proc_logs="$DNVR_STATE/logs/mprocs-${name}"
+      mkdir -p "$__proc_logs"
       cd "$DNVR_STATE/logs"
-      exec mprocs --config ${cfg} "$@"
+      exec mprocs --config ${cfg} \
+        --log-dir "$__proc_logs" --log-mode append "$@"
     '';
   }

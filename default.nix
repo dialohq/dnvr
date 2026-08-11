@@ -12,6 +12,7 @@
   builtinRunners = {
     mprocs = import ./runners/mprocs.nix {inherit pkgs lib;};
     process-compose = import ./runners/process-compose.nix {inherit pkgs lib;};
+    tmux = import ./runners/tmux.nix {inherit pkgs lib;};
   };
 
   runners = builtinRunners // extraRunners;

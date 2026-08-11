@@ -12,15 +12,16 @@ in {
     else p.command;
 
   # Shared up-script scaffolding: DNVR_STATE guard, env exports (plus a
-  # DNVR_ROOT guard when any value expands it), prerun, then exec the
-  # process manager. The up script is just the viewer — it owns no state:
-  # liveness is the flock each process holds on its pid file, and every
-  # process wipes its own keys as it claims it.
+  # DNVR_ROOT guard when any value expands it), optional reattachment before
+  # prerun, then exec the process manager. Process liveness is still the flock
+  # each process holds on its pid file, and every process wipes its own keys as
+  # it claims it.
   mkUpScript = {
     name,
     env,
     prerun,
     runtimeInputs,
+    reattach ? "",
     exec,
   }: let
     rootGuard =
@@ -41,6 +42,7 @@ in {
         ${rootGuard}
         ${envExports}
         mkdir -p "$DNVR_STATE/logs" "$DNVR_STATE/runtime"
+        ${reattach}
         ${prerun}
         ${exec}
       '';
