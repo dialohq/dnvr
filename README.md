@@ -114,7 +114,7 @@ From the dnvr repository, the development fixture exposes the same CLI through
 
 ```console
 $ nix run --impure --expr 'import ./dev/tmux-ui.nix'
-$ nix run --impure --expr 'import ./dev/tmux-ui.nix' -- logs stream
+$ nix run --impure --expr 'import ./dev/tmux-ui.nix' '' -- logs stream
 ```
 
 ### Completion

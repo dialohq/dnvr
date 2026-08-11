@@ -1,7 +1,7 @@
 # Run from the repository root:
 #
 #   nix run --impure --expr 'import ./dev/tmux-ui.nix'
-#   nix run --impure --expr 'import ./dev/tmux-ui.nix' -- logs stream
+#   nix run --impure --expr 'import ./dev/tmux-ui.nix' '' -- logs stream
 #
 # With no arguments the wrapper runs `dnvr up`; arguments are passed to the
 # real shell-scoped dnvr CLI. Sidebar changes hot-upgrade on the next run.
