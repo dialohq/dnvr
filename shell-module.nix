@@ -566,10 +566,10 @@
             shift
           done
           __dnvr_process="''${1:-}"
-          [ -n "$__dnvr_process" ] && [ "$#" -eq 1 ] || {
+          if [ -z "$__dnvr_process" ] || [ "$#" -ne 1 ]; then
             echo "usage: dnvr logs [-f|--follow] [-n|--tail LINES] [--ansi] <process>" >&2
             exit 64
-          }
+          fi
           case "$__dnvr_lines" in
             *[!0-9]*)
               echo "dnvr logs: line count must be a non-negative integer" >&2
