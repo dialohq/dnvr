@@ -1,7 +1,6 @@
 # Run from the repository root:
 #
-#   DNVR_STATE="$PWD/.dnvr" nix run --impure --expr \
-#     'import ./dev/tmux-ui.nix'
+#   nix run --impure --expr 'import ./dev/tmux-ui.nix'
 #
 # Stop the session with Q before rerunning after a source edit; otherwise the
 # runner correctly reattaches to the existing session and its old store paths.
@@ -15,8 +14,8 @@ let
     inherit command;
     runner_settings = {};
   };
-in
-  runner {
+in let
+  ui = runner {
     name = "tmux-ui";
     processes = {
       clock = process ''
@@ -49,4 +48,12 @@ in
         done
       '';
     };
+  };
+in
+  pkgs.writeShellApplication {
+    name = "dnvr-tmux-ui-dev";
+    text = ''
+      export DNVR_STATE="$PWD/.dnvr"
+      exec ${ui}/bin/tmux-ui
+    '';
   }
