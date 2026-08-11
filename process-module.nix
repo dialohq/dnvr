@@ -50,9 +50,9 @@ in {
       type = types.attrsOf (types.attrsOf types.anything);
       default = {};
       description = ''
-        Per-runner passthrough config, keyed by runner name, e.g.
-        `runner_settings."process-compose".depends_on`. Each runner reads
-        only its own key.
+        Per-runner passthrough config, keyed by runner name. This is mainly
+        useful for custom runners registered through `extraRunners`; each
+        runner reads only its own key.
       '';
     };
   };

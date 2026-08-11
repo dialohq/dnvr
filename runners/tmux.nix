@@ -21,10 +21,28 @@
       process = processes.${procName};
       command = runnerLib.resolveCommand procName process;
       logName = lib.replaceStrings ["/"] ["_"] procName;
+      readyName = ".launch-${toString index}";
+      guardedCommand = ''
+        while [[ ! -e "$DNVR_STATE/logs/tmux-${name}/${readyName}" ]]; do
+          ${pkgs.coreutils}/bin/sleep 0.01
+        done
+        ${command}
+      '';
+      launch =
+        if index == 0
+        then ''
+          __pane=$(tmux -S "$__socket" split-window -h -d -P -F '#{pane_id}' \
+            -t "$__sidebar" ${lib.escapeShellArg guardedCommand})
+        ''
+        else ''
+          __pane=$(tmux -S "$__socket" new-window -d -P -F '#{pane_id}' \
+            -t "=$__session:" -n ${lib.escapeShellArg procName} \
+            ${lib.escapeShellArg guardedCommand})
+        '';
     in ''
-      __pane=$(tmux -S "$__socket" new-window -d -P -F '#{pane_id}' \
-        -t "=$__session:" -n ${lib.escapeShellArg procName} \
-        ${lib.escapeShellArg command})
+      __ready="$__proc_logs/${readyName}"
+      ${pkgs.coreutils}/bin/rm -f "$__ready"
+      ${launch}
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_role process
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_name \
         ${lib.escapeShellArg procName}
@@ -33,12 +51,15 @@
       __log="$__proc_logs/${logName}.log"
       printf -v __pipe '%q >> %q' ${pkgs.coreutils}/bin/cat "$__log"
       tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
+      ${pkgs.coreutils}/bin/touch "$__ready"
     '') processNames);
 
   configureSession = ''
     tmux -S "$__socket" set-option -g status off
     tmux -S "$__socket" set-option -g remain-on-exit on
     tmux -S "$__socket" set-option -g mouse on
+    # Agent-facing `dnvr logs` reads the complete retained pane history.
+    tmux -S "$__socket" set-option -g history-limit 100000
     tmux -S "$__socket" set-option -g pane-border-status top
     tmux -S "$__socket" set-option -g pane-border-indicators off
     tmux -S "$__socket" set-option -g pane-border-format \
@@ -46,6 +67,7 @@
     tmux -S "$__socket" set-option -g pane-border-style fg=colour238
     tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
     tmux -S "$__socket" set-window-option -g window-size latest
+    tmux -S "$__socket" set-window-option -g main-pane-width 30
     tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
     tmux -S "$__socket" set-option -s escape-time 0
     tmux -S "$__socket" set-option -g prefix None
@@ -56,9 +78,9 @@
     tmux -S "$__socket" set-hook -g pane-died \
       "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
     tmux -S "$__socket" set-hook -g client-attached \
-      "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+      "select-layout -t '=$__session:dashboard' main-vertical ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
     tmux -S "$__socket" set-hook -g client-resized \
-      "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+      "select-layout -t '=$__session:dashboard' main-vertical"
   '';
 in
   runnerLib.mkUpScript {
@@ -156,16 +178,9 @@ in
 
       ${launchProcesses}
 
-      __first=$(tmux -S "$__socket" list-panes -s -t "=$__session" \
-        -F '#{@dnvr_index}	#{pane_id}' \
-        | ${pkgs.gawk}/bin/awk -F '\t' '$1 ~ /^[0-9]+$/ { print }' \
-        | ${pkgs.coreutils}/bin/sort -n -t $'\t' -k1,1 \
-        | ${pkgs.coreutils}/bin/head -n1 \
-        | ${pkgs.coreutils}/bin/cut -f2)
-      if [[ -n "$__first" ]]; then
-        tmux -S "$__socket" join-pane -h -s "$__first" -t "$__sidebar"
-        tmux -S "$__socket" resize-pane -t "$__sidebar" -x 30
-      fi
+      ${lib.optionalString (processNames != []) ''
+        tmux -S "$__socket" select-layout -t "=$__session:dashboard" main-vertical
+      ''}
       tmux -S "$__socket" select-pane -t "$__sidebar"
       exec tmux -S "$__socket" attach-session -t "=$__session"
     '';

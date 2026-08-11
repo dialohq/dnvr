@@ -208,7 +208,7 @@ in {
         # Paths in the XML are relative; cd to DNVR_ROOT so they resolve.
         cd "$DNVR_ROOT"
         # Native dual output: <log>file</log> + <console>true</console> writes
-        # to both the log file (for agents) and stderr (for mprocs panes).
+        # to both the log file (for agents) and stderr (for process panes).
         clickhouse-server --config-file=${configXml} &
         CH_PID=$!
         trap '

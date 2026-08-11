@@ -173,7 +173,7 @@ impl App {
                 tmux(&["swap-pane", "-d", "-s", target, "-t", &current])?;
             } else {
                 tmux(&["join-pane", "-h", "-s", target, "-t", &self.sidebar_pane])?;
-                tmux(&["resize-pane", "-t", &self.sidebar_pane, "-x", "30"])?;
+                tmux(&["select-layout", "-t", &self.sidebar_pane, "main-vertical"])?;
             }
         }
         if focus {

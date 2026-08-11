@@ -12,9 +12,8 @@ Shell state is confined to `.dnvr/*` under the repo root (nothing in
 `$HOME`), namespaced per process — shells in the same repo share it.
 Processes discover each other's runtime values (ports, socket dirs)
 through the bundled `dnvr-state` CLI — or declaratively via `dnvr://`
-env refs, which double as the process dependency graph — and run under
-a pluggable runner (`mprocs` by default; `tmux` and `process-compose` built
-in).
+env refs, which double as the process dependency graph — and run in a
+persistent, sidebar-first tmux dashboard.
 
 ## Usage (flake-parts)
 
@@ -73,7 +72,7 @@ Then:
 
 ```console
 $ nix develop .#backend   # shell with scripts, packages, env, banner
-$ dnvr up                 # inside the shell: mprocs with pg + api panes
+$ dnvr up                 # persistent dashboard with pg + api panes
 ```
 
 ## The `dnvr` CLI
@@ -84,24 +83,15 @@ Every devshell carries a `dnvr` command scoped to its shell:
 $ dnvr --help     # everything in this shell: commands, descriptions
 $ dnvr up         # launch the process group
 $ dnvr ps         # process status: pid + liveness per process
+$ dnvr logs api   # plain-text snapshot of api's retained scrollback
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
 
-### Persistent tmux runner
+### Persistent process dashboard
 
-For a sidebar-first viewer with native detach and reattach, select the tmux
-runner on a shell:
-
-```nix
-dnvr.shells.backend = {runners, ...}: {
-  runner = runners.tmux;
-  # processes = { ... };
-};
-```
-
-This does not put mprocs inside tmux. Every process command runs directly in
-its own tmux pane. The dashboard keeps a fixed process-list pane on the left
+Every process command runs directly in its own tmux pane. The dashboard keeps
+a fixed process-list pane on the left
 and swaps the selected process into the pane on the right; background
 processes remain in detached tmux windows. A Rust/ratatui sidebar has no redraw
 timer and uses buffered cell diffs only for input, resize, focus, or process
@@ -114,7 +104,10 @@ place without restarting the process panes.
 - `Ctrl-A` returns focus to the sidebar; `Ctrl-G` detaches cleanly.
 - `r` restarts and `x` interrupts the selected process; `Q` stops the group.
 - Running `dnvr up` again reattaches to the existing session.
-- Process output is also appended under `.dnvr/logs/tmux-<shell>/`.
+- `dnvr logs <process>` dumps the entire retained tmux scrollback as plain
+  text for humans and agents. `--ansi` preserves colors, `-n <lines>` limits
+  the snapshot, and `-f` follows the full-session archive.
+- Raw process output is also appended under `.dnvr/logs/tmux-<shell>-up/`.
 
 ### Completion
 
@@ -196,7 +189,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
 | arg | what it is |
 |---|---|
 | `presets` | Built-in process presets (`postgres`, `clickhouse`) plus `dnvr.presets`. |
-| `runners` | Up-script builders (`mprocs`, `tmux`, `process-compose`) plus `dnvr.extraRunners`. |
+| `runners` | The tmux up-script builder plus `dnvr.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
 
@@ -210,10 +203,9 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   under two names gives two independent instances — the process name
   namespaces data dirs, env vars, and `dnvr-state` scope. Besides `command`,
   a process can contribute `packages`, `env`, and `scripts` to the devshell,
-  and carry runner-specific config under
-  `runner_settings.<runner>.<key>` (e.g.
-  `runner_settings."process-compose".depends_on`); each runner reads only its
-  own key. Each process gets `DNVR_RUNTIME_DIR` scoped to its name so
+  and carry custom-runner config under `runner_settings.<runner>.<key>`;
+  each runner reads only its own key. Each process gets `DNVR_RUNTIME_DIR`
+  scoped to its name so
   `dnvr-state set` needs no self-identification. A process `env` value of
   the form `dnvr://<proc>/<key>` declares a dependency — see
   [`dnvr://` refs](#dnvr-refs).
@@ -227,8 +219,8 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   `dnvr://` refs.
 - `prerun` — shell code run inside the up-script before the runner execs
   (dynamic port picking etc.; anything `export`ed flows to all processes).
-- `runner` — defaults to `runners.mprocs`; use `runners.tmux` for a persistent,
-  reattachable sidebar viewer.
+- `runner` — defaults to the persistent, reattachable `runners.tmux` sidebar
+  viewer. It may be replaced by a custom `dnvr.extraRunners` entry.
 - `shellHook` — escape hatch.
 
 ## Runtime contract
@@ -330,9 +322,8 @@ Semantics:
   a DSN), publish it already composed from the producer.
 - **Refs are for live values.** A value is readable only while its
   producer runs, so run-to-completion ordering (migrations before api)
-  is not a ref concern: use the runner's native ordering
-  (`runner_settings."process-compose".depends_on` with
-  `process_completed_successfully`), and keep truly-once initialization
+  is not a ref concern. A custom runner may expose native ordering through
+  `runner_settings`; keep truly-once initialization
   with the data it initializes (the postgres preset's `initialScript`
   runs once per data dir).
 - A string `command` that carries refs is wrapped in a script (with
