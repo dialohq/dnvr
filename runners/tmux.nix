@@ -328,10 +328,11 @@ in
       tmux -S "$__socket" set-option -g remain-on-exit on
       tmux -S "$__socket" set-option -g mouse on
       tmux -S "$__socket" set-option -g pane-border-status top
+      tmux -S "$__socket" set-option -g pane-border-indicators off
       tmux -S "$__socket" set-option -g pane-border-format \
-        ' #{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}} '
-      tmux -S "$__socket" set-option -g pane-active-border-style fg=cyan
+        ' #{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
       tmux -S "$__socket" set-option -g pane-border-style fg=colour238
+      tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
       tmux -S "$__socket" set-window-option -g window-size latest
       tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
       tmux -S "$__socket" set-option -s escape-time 0
