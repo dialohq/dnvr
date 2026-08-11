@@ -102,7 +102,7 @@
       }
 
       render() {
-        local i row pane proc dead current current_active marker status style reset height footer_row rendered old footer_hint
+        local i row pane proc dead current current_active marker status style reset height width name_width footer_row rendered old footer_hint
         local -a next_lines=()
         current=$(visible_pane)
         current_active=0
@@ -110,6 +110,11 @@
           current_active=$(tmux display-message -p -t "$current" '#{pane_active}')
         fi
         height=$(tmux display-message -p -t "$sidebar_pane" '#{pane_height}')
+        width=$(tmux display-message -p -t "$sidebar_pane" '#{pane_width}')
+        # marker + gap + name + gap + four-character status = pane width.
+        # Keep one name cell even in an unusually narrow test terminal.
+        name_width=$((width - 7))
+        (( name_width > 0 )) || name_width=1
         for ((i = 0; i < height; i++)); do
           next_lines[i]=""
         done
@@ -133,11 +138,11 @@
           fi
           reset='\033[0m'
           if (( i == selected )); then
-            printf -v rendered '\033[7m%s %-16.16s %b%4s\033[39m\033[K\033[0m' \
-              "$marker" "$proc" "$style" "$status"
+            printf -v rendered '\033[7m%s %-*.*s %b%4s\033[39m\033[0m' \
+              "$marker" "$name_width" "$name_width" "$proc" "$style" "$status"
           else
-            printf -v rendered '%s %-16.16s %b%4s%b' \
-              "$marker" "$proc" "$style" "$status" "$reset"
+            printf -v rendered '%s %-*.*s %b%4s%b' \
+              "$marker" "$name_width" "$name_width" "$proc" "$style" "$status" "$reset"
           fi
           if (( i < height )); then
             next_lines[i]="$rendered"
@@ -274,7 +279,7 @@
     tmux -S "$__socket" set-option -g pane-border-status top
     tmux -S "$__socket" set-option -g pane-border-indicators off
     tmux -S "$__socket" set-option -g pane-border-format \
-      ' #{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
+      '#{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
     tmux -S "$__socket" set-option -g pane-border-style fg=colour238
     tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
     tmux -S "$__socket" set-window-option -g window-size latest
