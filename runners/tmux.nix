@@ -266,6 +266,32 @@
       printf -v __pipe '%q >> %q' ${pkgs.coreutils}/bin/cat "$__log"
       tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
     '') processNames);
+
+  configureSession = ''
+    tmux -S "$__socket" set-option -g status off
+    tmux -S "$__socket" set-option -g remain-on-exit on
+    tmux -S "$__socket" set-option -g mouse on
+    tmux -S "$__socket" set-option -g pane-border-status top
+    tmux -S "$__socket" set-option -g pane-border-indicators off
+    tmux -S "$__socket" set-option -g pane-border-format \
+      ' #{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
+    tmux -S "$__socket" set-option -g pane-border-style fg=colour238
+    tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
+    tmux -S "$__socket" set-window-option -g window-size latest
+    tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
+    tmux -S "$__socket" set-option -s escape-time 0
+    tmux -S "$__socket" set-option -g prefix None
+    tmux -S "$__socket" set-option -g prefix2 None
+    tmux -S "$__socket" bind-key -n C-g detach-client
+    tmux -S "$__socket" bind-key -n C-a \
+      "select-pane -t '$__sidebar' ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+    tmux -S "$__socket" set-hook -g pane-died \
+      "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+    tmux -S "$__socket" set-hook -g client-attached \
+      "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+    tmux -S "$__socket" set-hook -g client-resized \
+      "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+  '';
 in
   runnerLib.mkUpScript {
     inherit name env prerun;
@@ -277,6 +303,12 @@ in
       __socket="$DNVR_STATE/runtime/tmux-${name}.sock"
       __session=dnvr
       if tmux -S "$__socket" has-session -t "=$__session" 2>/dev/null; then
+        __sidebar=$(tmux -S "$__socket" list-panes -s -t "=$__session" \
+          -F '#{@dnvr_role}\t#{pane_id}' \
+          | ${pkgs.gawk}/bin/awk -F '\t' '$1 == "sidebar" { print $2; exit }')
+        __sidebar_pid=$(tmux -S "$__socket" display-message -p \
+          -t "$__sidebar" '#{@dnvr_sidebar_pid}')
+        ${configureSession}
         exec tmux -S "$__socket" attach-session -t "=$__session"
       fi
     '';
@@ -324,28 +356,7 @@ in
       __sidebar_pid=$(tmux -S "$__socket" display-message -p \
         -t "$__sidebar" '#{@dnvr_sidebar_pid}')
 
-      tmux -S "$__socket" set-option -g status off
-      tmux -S "$__socket" set-option -g remain-on-exit on
-      tmux -S "$__socket" set-option -g mouse on
-      tmux -S "$__socket" set-option -g pane-border-status top
-      tmux -S "$__socket" set-option -g pane-border-indicators off
-      tmux -S "$__socket" set-option -g pane-border-format \
-        ' #{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
-      tmux -S "$__socket" set-option -g pane-border-style fg=colour238
-      tmux -S "$__socket" set-option -g pane-active-border-style fg=colour238
-      tmux -S "$__socket" set-window-option -g window-size latest
-      tmux -S "$__socket" set-option -g default-shell ${pkgs.bash}/bin/bash
-      tmux -S "$__socket" set-option -s escape-time 0
-      tmux -S "$__socket" unbind-key C-b
-      tmux -S "$__socket" bind-key -n C-g detach-client
-      tmux -S "$__socket" bind-key -n C-a \
-        "select-pane -t '$__sidebar' ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-      tmux -S "$__socket" set-hook -g pane-died \
-        "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-      tmux -S "$__socket" set-hook -g client-attached \
-        "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
-      tmux -S "$__socket" set-hook -g client-resized \
-        "resize-pane -t '$__sidebar' -x 30 ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+      ${configureSession}
 
       ${launchProcesses}
 
