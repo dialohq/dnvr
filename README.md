@@ -103,8 +103,10 @@ dnvr.shells.backend = {runners, ...}: {
 This does not put mprocs inside tmux. Every process command runs directly in
 its own tmux pane. The dashboard keeps a fixed process-list pane on the left
 and swaps the selected process into the pane on the right; background
-processes remain in detached tmux windows. The sidebar has no redraw timer and
-updates only for input or a process exit.
+processes remain in detached tmux windows. A Rust/ratatui sidebar has no redraw
+timer and uses buffered cell diffs only for input, resize, focus, or process
+lifecycle events. Reattaching after a dnvr rebuild upgrades that sidebar in
+place without restarting the process panes.
 
 - `j`/`k` moves the selection. `Enter` first shows that process and a second
   `Enter` enters its pane; `●` means shown and `▶` means interactive.

@@ -2,8 +2,9 @@
 #
 #   nix run --impure --expr 'import ./dev/tmux-ui.nix'
 #
-# Stop the session with Q before rerunning after a source edit; otherwise the
-# runner correctly reattaches to the existing session and its old store paths.
+# Sidebar changes hot-upgrade on the next run. Stop the session with Q only
+# when changing fixture process commands, whose panes retain their original
+# command while the session is alive.
 let
   pkgs = (builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem};
   runner = import ../runners/tmux.nix {
