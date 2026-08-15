@@ -1,6 +1,5 @@
 use std::{
     env,
-    error::Error,
     ffi::OsString,
     fs,
     io::{self, Read, Stdout, Write},
@@ -34,7 +33,11 @@ use ratatui::{
 use signal_hook::consts::signal::SIGUSR1;
 use unicode_width::UnicodeWidthChar;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+use dnvr_tmux_sidebar::{Result, state};
+
+mod cli;
+mod controller;
+mod manifest;
 
 const LOG_ROTATION_SIZE: &str = "10M";
 const LOG_ROTATION_FILES: &str = "3";
@@ -147,6 +150,28 @@ struct Process {
     state: ProcessState,
 }
 
+fn parse_processes(output: &str) -> Vec<Process> {
+    let mut processes = output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(5, '\t');
+            let index = fields.next()?.parse().ok()?;
+            let pane = fields.next()?.to_owned();
+            let name = fields.next()?.to_owned();
+            let dead = fields.next()?;
+            let exit_status = fields.next()?;
+            Some(Process {
+                index,
+                pane,
+                name,
+                state: ProcessState::from_tmux(dead, exit_status),
+            })
+        })
+        .collect::<Vec<_>>();
+    processes.sort_by_key(|process| process.index);
+    processes
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessState {
     Up,
@@ -239,25 +264,7 @@ impl App {
             "-F",
             "#{@dnvr_index}\t#{pane_id}\t#{@dnvr_name}\t#{pane_dead}\t#{pane_dead_status}",
         ])?;
-        let mut processes = output
-            .lines()
-            .filter_map(|line| {
-                let mut fields = line.splitn(5, '\t');
-                let index = fields.next()?.parse().ok()?;
-                let pane = fields.next()?.to_owned();
-                let name = fields.next()?.to_owned();
-                let dead = fields.next()?;
-                let exit_status = fields.next()?;
-                Some(Process {
-                    index,
-                    pane,
-                    name,
-                    state: ProcessState::from_tmux(dead, exit_status),
-                })
-            })
-            .collect::<Vec<_>>();
-        processes.sort_by_key(|process| process.index);
-        self.processes = processes;
+        self.processes = parse_processes(&output);
         self.selected = self.selected.min(self.processes.len().saturating_sub(1));
         Ok(())
     }
@@ -443,7 +450,7 @@ impl Drop for TerminalRestore {
 }
 
 fn tmux(args: &[&str]) -> Result<Output> {
-    let output = Command::new("tmux").args(args).output()?;
+    let output = Command::new(&manifest::get().tmux).args(args).output()?;
     if output.status.success() {
         Ok(output)
     } else {
@@ -457,7 +464,9 @@ fn tmux(args: &[&str]) -> Result<Output> {
 }
 
 fn tmux_text(args: &[&str]) -> Result<String> {
-    Ok(String::from_utf8(tmux(args)?.stdout)?.trim_end().to_owned())
+    Ok(String::from_utf8(tmux(args)?.stdout)?
+        .trim_end_matches(['\r', '\n'])
+        .to_owned())
 }
 
 fn sidebar() -> Result<()> {
@@ -518,9 +527,40 @@ fn sidebar() -> Result<()> {
 
 fn main() -> Result<()> {
     let mut args = env::args_os();
-    let _executable = args.next();
-    if args.next().as_deref() == Some(std::ffi::OsStr::new("__record")) {
-        recorder(args)
+    let executable = args.next().unwrap_or_default();
+    let mode = args.next();
+    match mode.as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some("__record") => return recorder(args),
+        Some("__sidebar") => return sidebar(),
+        Some("__process") => {
+            let index = args
+                .next()
+                .ok_or("missing process index")?
+                .to_string_lossy()
+                .parse()?;
+            return controller::process(index);
+        }
+        _ => {}
+    }
+    let has_arguments = mode.is_some();
+    let arguments = mode.into_iter().chain(args);
+    if std::path::Path::new(&executable)
+        .file_name()
+        .is_some_and(|name| name == std::ffi::OsStr::new("dnvr"))
+    {
+        return cli::run(arguments);
+    }
+    if std::path::Path::new(&executable)
+        .file_name()
+        .is_some_and(|name| name == std::ffi::OsStr::new(&manifest::get().name))
+    {
+        if has_arguments {
+            Err("the runner does not accept arguments; use dnvr instead".into())
+        } else {
+            controller::up()
+        }
+    } else if has_arguments {
+        Err("unknown internal mode".into())
     } else {
         sidebar()
     }
@@ -537,6 +577,14 @@ mod tests {
         assert_eq!(ProcessState::from_tmux("1", "0"), ProcessState::Completed);
         assert_eq!(ProcessState::from_tmux("1", "1"), ProcessState::Down);
         assert_eq!(ProcessState::from_tmux("1", "127"), ProcessState::Down);
+    }
+
+    #[test]
+    fn keeps_the_final_live_process_with_an_empty_exit_status() {
+        let processes = parse_processes("0\t%1\tapi\t0\t\n1\t%2\tworker\t0\t");
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[1].name, "worker");
+        assert_eq!(processes[1].state, ProcessState::Up);
     }
 
     #[test]
