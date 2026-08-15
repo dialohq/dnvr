@@ -107,7 +107,9 @@ place without restarting the process panes.
 - `dnvr logs <process>` dumps the entire retained tmux scrollback as plain
   text for humans and agents. `--ansi` preserves colors, `-n <lines>` limits
   the snapshot, and `-f` follows the full-session archive.
-- Raw process output is also appended under `.dnvr/logs/tmux-<shell>-up/`.
+- Each process has both a raw `.log` transcript and an ANSI-stripped
+  `.plain.log` transcript under `.dnvr/logs/tmux-<shell>-up/`; followers tail
+  the appropriate file directly.
 
 From the dnvr repository, the development fixture exposes the same CLI through
 `nix run`. Start its dashboard in one terminal, then query it from another:
