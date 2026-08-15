@@ -6,7 +6,6 @@
   mkScript,
   runners,
   presets,
-  dnvrState,
   dnvrSpecialArgs,
   ...
 }: let
@@ -122,14 +121,15 @@
     then x
     else throw "dnvr shell '${name}': invalid configuration:\n  - ${lib.concatStringsSep "\n  - " problems}";
 
-  scriptPkgs =
-    lib.mapAttrsToList
+  scriptPkgsByName =
+    lib.mapAttrs
     (n: s:
       mkScript {
         name = n;
         inherit (s) shell text runtimeInputs;
       })
     allScripts;
+  scriptPkgs = lib.attrValues scriptPkgsByName;
 
   # Ref-cache plumbing shared by the process wrapper (hard-fail) and the
   # devshell hook (best-effort). Cached values are plaintext files keyed by
@@ -200,75 +200,22 @@
 
   refEntryExports = lib.concatStrings (lib.mapAttrsToList entryResolveRef entryRefs);
 
-  # Every process runs with DNVR_RUNTIME_DIR pointing at runtime/<procName>
-  # and dnvr-state on PATH, so `dnvr-state set` needs no self-identification.
-  # Derivation commands and commands with env refs become a store script
-  # (set -euo pipefail; refs resolve before the exec). Plain string commands
-  # get the same env via a string preamble instead — they keep the runner's
-  # sh semantics and are not shellchecked.
-  # Launching is probe → wipe → claim, made atomic by two locks in the
-  # runtime dir:
-  #
-  #   launch.lock — mutex over the launch sequence below, held only for
-  #     its few lines. Concurrent launchers serialize here, so the probe
-  #     can be trusted for the duration of the wipe and claim.
-  #   pid — the liveness source. The winner opens it on fd 9 and holds
-  #     an exclusive flock for life (fds survive exec; the kernel drops
-  #     the lock on death, SIGKILL included); its content is the live
-  #     pid. `dnvr ps` and `dnvr-state get/wait` read liveness from the
-  #     lock, never from the pid number, so a recycled pid can't
-  #     masquerade as running.
-  #
-  # Under launch.lock: a held pid lock means a live instance — fail fast
-  # without touching its state. A free pid lock proves any keys on disk
-  # are a dead incarnation's, so the wipe is safe; and because the wipe
-  # runs BEFORE the pid lock is taken, readers — which trust a key only
-  # under a held pid lock — can never observe a stale key as live: every
-  # key readable under a held lock was written by the current
-  # incarnation. The pid is written in place, not via dnvr-state — its
-  # tmp+mv would detach the locked inode from the path — and opened
-  # O_APPEND, truncated only after its lock is won. Nothing ever unlinks
-  # pid or launch.lock (the wipe spares them); path lock identity is the
-  # liveness source.
-  # The runner receives only {command, runner_settings} — the devshell-facing
-  # buckets (packages, env, scripts) must not leak into runner configs.
-  claimPidFile = procName: ''
-    exec 8>>"$DNVR_RUNTIME_DIR/launch.lock"
-    flock -n 8 || {
-      echo "[${procName}] another launch is in progress" >&2
-      exit 1
-    }
-    if ! flock -ns "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null; then
-      echo "[${procName}] pid file is locked — already running?" >&2
-      exit 1
-    fi
-    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name launch.lock -exec ${pkgs.coreutils}/bin/rm -rf {} +
-    exec 9>>"$DNVR_RUNTIME_DIR/pid"
-    flock -n 9 || {
-      echo "[${procName}] pid file is locked — already running?" >&2
-      exit 1
-    }
-    : > "$DNVR_RUNTIME_DIR/pid"
-    printf '%s\n' "$$" >&9
-    exec 8>&-
-  '';
-
+  # Rust owns process scoping, stale-state cleanup, and the lifetime PID lock.
+  # A shell wrapper remains only when ref handlers need to execute configured
+  # resolver commands before the final process command.
   wrapProcess = procName: p: let
     refs = processRefs.${procName};
     resolveRefs = lib.concatStrings (lib.mapAttrsToList procResolveRef refs);
     handlerInputs =
       lib.unique (lib.concatMap (v: (parseRef v).handler.runtimeInputs) (lib.attrValues refs));
     wrapped =
-      if lib.isDerivation p.command || refs != {}
+      if refs != {}
       then
         pkgs.writeShellApplication {
           name = "${procName}-scoped";
-          runtimeInputs = [dnvrState pkgs.flock] ++ handlerInputs;
+          runtimeInputs = handlerInputs;
           text = ''
             : "''${DNVR_STATE:?DNVR_STATE must be set}"
-            export DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
-            mkdir -p "$DNVR_RUNTIME_DIR"
-            ${claimPidFile procName}
             ${resolveRefs}${
             if lib.isDerivation p.command
             then ''exec ${lib.getExe p.command} "$@"''
@@ -276,11 +223,7 @@
           }
           '';
         }
-      else ''
-        export PATH=${dnvrState}/bin:${pkgs.flock}/bin:"$PATH" DNVR_RUNTIME_DIR="$DNVR_STATE/runtime/${procName}"
-        mkdir -p "$DNVR_RUNTIME_DIR"
-        ${claimPidFile procName}
-        ${p.command}'';
+      else p.command;
   in {
     command = wrapped;
     inherit (p) runner_settings;
@@ -293,6 +236,13 @@
     processes = wrappedProcesses;
     env = allEnv;
     prerun = config.prerun;
+    cli = {
+      tail = "${pkgs.coreutils}/bin/tail";
+      help = helpText;
+      list = listText;
+      ps_width = psWidth;
+      scripts = lib.mapAttrs (_: package: lib.getExe package) scriptPkgsByName;
+    };
   };
 
   inherit (import ./env-export.nix {inherit lib;}) exportLine refersToRoot;
@@ -351,21 +301,6 @@
   psWidth =
     2 + lib.foldl' lib.max (lib.stringLength "PROCESS") (map lib.stringLength knownProcs);
 
-  psRows =
-    lib.concatMapStrings (n: ''
-      __dnvr_ps_row ${lib.escapeShellArg n} "$DNVR_STATE/runtime/${n}/pid"
-    '')
-    knownProcs;
-
-  logCases = lib.concatStrings (lib.imap0 (index: n: let
-    logName = lib.replaceStrings ["/"] ["_"] n;
-  in ''
-    ${lib.escapeShellArg n})
-      __dnvr_log="$DNVR_STATE/logs/tmux-${name}-up/${logName}.log"
-      __dnvr_index=${toString index}
-      ;;
-  '') knownProcs);
-
   # "api→pg" in listings when api consumes one of pg's keys.
   procLabel = n:
     if depGraph.${n} == []
@@ -391,280 +326,35 @@
 
   listText = lib.concatMapStrings (c: "${c.name}\t${c.desc}\n") listRows;
 
-  bashCompletion = ''
-    _dnvr() {
-      local cur
-      cur="''${COMP_WORDS[COMP_CWORD]}"
-      [ "$COMP_CWORD" -eq 1 ] || return 0
-      mapfile -t COMPREPLY < <(compgen -W "$(dnvr --list 2>/dev/null | cut -f1)" -- "$cur")
-    }
-    complete -F _dnvr dnvr
-  '';
+  dnvrCli = upScript;
 
-  zshFunction = ''
-    _dnvr() {
-      local -a lines cmds
-      lines=("''${(@f)$(dnvr --list 2>/dev/null)}")
-      cmds=("''${lines[@]//$'\t'/:}")
-      _describe -V -t commands 'dnvr command' cmds
-    }
-  '';
+  completionFile = shell:
+    pkgs.runCommand "dnvr-${shell}-completion" {} ''
+      ${dnvrCli}/bin/dnvr completions ${shell} > "$out"
+    '';
 
-  # For eval'ing into a live shell (`dnvr completions zsh`).
-  zshCompletion = zshFunction + "compdef _dnvr dnvr\n";
+  nuCompletionFile = completionFile "nushell";
 
-  # Autoloadable fpath file (share/zsh/site-functions/_dnvr).
-  zshCompletionFile = "#compdef dnvr\n" + zshFunction + "_dnvr \"$@\"\n";
-
-  fishCompletion = ''
-    complete -c dnvr -f
-    complete -c dnvr -n __fish_use_subcommand -a '(dnvr --list 2>/dev/null)'
-  '';
-
-  # Exported so the file works as a module: nushell vendor-autoloads it in
-  # shells started inside the env, and `overlay use .dnvr/dnvr-completions.nu`
-  # loads it into an already-running REPL (venv activate.nu style).
-  nuCompletion = ''
-    export def "nu-complete dnvr" [] {
-      if (which dnvr | is-empty) {
-        return []
-      }
-      {
-        options: {sort: false}
-        completions: (^dnvr --list | lines | each {|line|
-          let parts = ($line | split row "\t")
-          {
-            value: ($parts | first)
-            description: (if ($parts | length) > 1 { $parts | get 1 } else { "" })
-          }
-        })
-      }
-    }
-
-    export extern "dnvr" [
-      command?: string@"nu-complete dnvr"
-      ...args: string
-    ]
-  '';
-
-  # Completion files in the standard discovery locations, wired up via
-  # XDG_DATA_DIRS and NIX_PROFILES in the shellHook. bash-completion resolves
-  # XDG_DATA_DIRS lazily at first <tab>, so it works even when the env
-  # arrives via direnv; fish and nushell (≥0.96 vendor autoload) read it at
-  # shell startup. zsh discovery rides NIX_PROFILES instead: nix-darwin's
-  # /etc/zshenv, NixOS, and home-manager's .zshrc all scan
-  # $profile/share/zsh/site-functions for every listed profile before
-  # compinit, with append semantics — so any nix-managed zsh started inside
-  # the devshell registers _dnvr automatically and nothing else changes.
-  #
-  # Deliberately NOT exported: FPATH. zsh imports an inherited FPATH verbatim
-  # as its entire fpath, dropping its compiled-in function directory — every
-  # autoload (compinit, add-zsh-hook, ...) then fails and the shell is
-  # unusable. And for a zsh already running when direnv applies the env it
-  # would do nothing anyway: compinit has already run, so a new completion
-  # file is never registered; that case is `dnvr completions zsh` (see
-  # README).
+  # Completion files in standard discovery locations. Their contents come
+  # from clap's single typed command model rather than four Nix templates.
   dnvrShare = pkgs.linkFarm "dnvr-completions" [
     {
       name = "share/bash-completion/completions/dnvr";
-      path = pkgs.writeText "dnvr.bash" bashCompletion;
+      path = completionFile "bash";
     }
     {
       name = "share/zsh/site-functions/_dnvr";
-      path = pkgs.writeText "_dnvr" zshCompletionFile;
+      path = completionFile "zsh";
     }
     {
       name = "share/fish/vendor_completions.d/dnvr.fish";
-      path = pkgs.writeText "dnvr.fish" fishCompletion;
+      path = completionFile "fish";
     }
     {
       name = "share/nushell/vendor/autoload/dnvr-completions.nu";
       path = nuCompletionFile;
     }
   ];
-
-  # Named so the module name differs from the `dnvr` extern — nushell
-  # forbids `export extern "dnvr"` from a module itself named `dnvr`.
-  nuCompletionFile = pkgs.writeText "dnvr-completions.nu" nuCompletion;
-
-  scriptDispatch = lib.concatMapStrings (n: ''
-    "${n}")
-      shift
-      exec "${n}" "$@"
-      ;;
-  '') (lib.attrNames allScripts);
-
-  dnvrCli = pkgs.writeShellApplication {
-    name = "dnvr";
-    runtimeInputs =
-      [upScript dnvrState pkgs.flock pkgs.coreutils pkgs.tmux pkgs.gawk pkgs.ansifilter]
-      ++ scriptPkgs;
-    # The help/list/completions bodies are single-quoted on purpose (printf
-    # '%s' with escapeShellArg); SC2016 flags the $ inside them.
-    excludeShellChecks = ["SC2016"];
-    text = ''
-      # label, pidfile -> one `dnvr ps` table row. Liveness comes from the
-      # exclusive flock the process holds on its pid file for life — never
-      # from the file's presence or the pid number, so recycled pids can't
-      # lie. Files persist after exit (nothing cleans them; the next launch
-      # wipes them): unlocked file -> `exited`, no file -> `stopped`.
-      __dnvr_ps_row() {
-        local pid="-" status="stopped"
-        if [ -f "$2" ]; then
-          read -r pid < "$2" || true
-          [ -n "$pid" ] || pid="-"
-          if flock -ns "$2" true 2>/dev/null; then
-            status=exited
-          else
-            status=running
-          fi
-        fi
-        printf '%-${toString psWidth}s %-8s %s\n' "$1" "$pid" "$status"
-      }
-
-      cmd="''${1:-}"
-      case "$cmd" in
-        "" | --help | -h | help)
-          printf '%s\n' ${lib.escapeShellArg helpText}
-          ;;
-        --list)
-          printf '%s' ${lib.escapeShellArg listText}
-          ;;
-        up)
-          shift
-          exec "${name}-up" "$@"
-          ;;
-        ps)
-          printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS
-          ${psRows}
-          ;;
-        logs)
-          shift
-          __dnvr_follow=false
-          __dnvr_ansi=false
-          __dnvr_lines=
-          while [ "$#" -gt 0 ]; do
-            case "$1" in
-              -f | --follow) __dnvr_follow=true ;;
-              --ansi) __dnvr_ansi=true ;;
-              -n | --tail)
-                [ "$#" -ge 2 ] || {
-                  echo "dnvr logs: $1 needs a line count" >&2
-                  exit 64
-                }
-                __dnvr_lines="$2"
-                shift
-                ;;
-              --tail=*) __dnvr_lines="''${1#*=}" ;;
-              --) shift; break ;;
-              -*)
-                echo "dnvr logs: unknown option '$1'" >&2
-                exit 64
-                ;;
-              *) break ;;
-            esac
-            shift
-          done
-          __dnvr_process="''${1:-}"
-          if [ -z "$__dnvr_process" ] || [ "$#" -ne 1 ]; then
-            echo "usage: dnvr logs [-f|--follow] [-n|--tail LINES] [--ansi] <process>" >&2
-            exit 64
-          fi
-          case "$__dnvr_lines" in
-            *[!0-9]*)
-              echo "dnvr logs: line count must be a non-negative integer" >&2
-              exit 64
-              ;;
-          esac
-          case "$__dnvr_process" in
-            ${logCases}
-            *)
-              echo "dnvr logs: unknown process '$__dnvr_process'" >&2
-              exit 64
-              ;;
-          esac
-          __dnvr_socket="$DNVR_STATE/runtime/tmux-${name}-up.sock"
-          __dnvr_pane=
-          if [ -S "$__dnvr_socket" ]; then
-            __dnvr_pane=$(tmux -S "$__dnvr_socket" list-panes -s -t =dnvr \
-              -F '#{@dnvr_index}:#{pane_id}' 2>/dev/null \
-              | awk -F : -v wanted="$__dnvr_index" '$1 == wanted { print $2; exit }')
-          fi
-          [ -n "$__dnvr_pane" ] || {
-            echo "dnvr logs: no pane for '$__dnvr_process' (run 'dnvr up' first)" >&2
-            exit 1
-          }
-          if "$__dnvr_follow"; then
-            [ -f "$__dnvr_log" ] || {
-              echo "dnvr logs: no log yet for '$__dnvr_process'" >&2
-              exit 1
-            }
-            __dnvr_tail=(-n "''${__dnvr_lines:-+1}" -F)
-            if "$__dnvr_ansi"; then
-              exec tail "''${__dnvr_tail[@]}" "$__dnvr_log"
-            else
-              tail "''${__dnvr_tail[@]}" "$__dnvr_log" | ansifilter
-            fi
-          else
-            __dnvr_capture=(-p -J -S - -t "$__dnvr_pane")
-            "$__dnvr_ansi" && __dnvr_capture=(-e "''${__dnvr_capture[@]}")
-            if "$__dnvr_ansi"; then
-              if [ -n "$__dnvr_lines" ]; then
-                tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                  | tail -n "$__dnvr_lines"
-              else
-                exec tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}"
-              fi
-            else
-              # capture-pane includes unused screen rows and tmux's synthetic
-              # "Pane is dead" footer. Keep real internal blank lines while
-              # trimming that display-only tail from agent-facing output.
-              tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                | awk '
-                    /^Pane is dead \(status [0-9]+,/ { next }
-                    { line[NR] = $0; if ($0 !~ /^[[:space:]]*$/) last = NR }
-                    END { for (i = 1; i <= last; i++) print line[i] }
-                  ' \
-                | if [ -n "$__dnvr_lines" ]; then
-                    tail -n "$__dnvr_lines"
-                  else
-                    cat
-                  fi
-            fi
-          fi
-          ;;
-        state)
-          shift
-          exec dnvr-state "$@"
-          ;;
-        completions)
-          case "''${2:-}" in
-            bash)
-              printf '%s' ${lib.escapeShellArg bashCompletion}
-              ;;
-            zsh)
-              printf '%s' ${lib.escapeShellArg zshCompletion}
-              ;;
-            fish)
-              printf '%s' ${lib.escapeShellArg fishCompletion}
-              ;;
-            nu | nushell)
-              printf '%s' ${lib.escapeShellArg nuCompletion}
-              ;;
-            *)
-              echo "usage: dnvr completions <bash|zsh|fish|nushell>" >&2
-              exit 64
-              ;;
-          esac
-          ;;
-      ${scriptDispatch}
-        *)
-          echo "dnvr: unknown command '$cmd' (try 'dnvr --help')" >&2
-          exit 64
-          ;;
-      esac
-    '';
-  };
 
   bannerLines = let
     rows =
@@ -830,7 +520,7 @@ in {
     runner = mkOption {
       type = types.functionTo types.package;
       default = runners.tmux;
-      description = "Function `{name, processes, env, prerun}: drv` that produces the up-script.";
+      description = "Function `{name, processes, env, prerun, cli}: drv` that produces the runner.";
     };
 
     shell = mkOption {
@@ -857,7 +547,7 @@ in {
       r = parseDnvrRef url;
     in "dnvr-state wait ${r.proc}.${r.key} --timeout 120";
     inShell = false;
-    runtimeInputs = [dnvrState];
+    runtimeInputs = [];
   };
 
   config.dependencies = depGraph;
@@ -868,7 +558,7 @@ in {
 
   config.shell = checkProblems (pkgs.mkShell ({
       name = "dnvr-${name}";
-      packages = config.packages ++ processPackages ++ scriptPkgs ++ [dnvrState config.cli];
+      packages = config.packages ++ processPackages ++ scriptPkgs ++ [config.cli];
       shellHook = ''
         export DNVR_ROOT="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
         export DNVR_STATE="$DNVR_ROOT/.dnvr"

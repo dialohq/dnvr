@@ -1,0 +1,18 @@
+{
+  "name": "dnvr-test-up",
+  "tmux": "tmux",
+  "shell": "/bin/sh",
+  "tmux_config": "/dev/null",
+  "rotatelogs": "rotatelogs",
+  "ansifilter": "ansifilter",
+  "prerun": "",
+  "env": {},
+  "processes": [],
+  "cli": {
+    "tail": "tail",
+    "help": "dnvr test",
+    "list": "up\\n",
+    "ps_width": 9,
+    "scripts": {}
+  }
+}
