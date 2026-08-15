@@ -109,8 +109,9 @@ place without restarting the process panes.
   the snapshot, and `-f` follows the full-session archive.
 - Each process has both a raw `.log` transcript and an ANSI-stripped
   `.plain.log` transcript under `.dnvr/logs/tmux-<shell>-up/`; followers tail
-  the appropriate file directly. Each transcript is size-rotated with
-  `rotatelogs`: three 10 MiB files are retained per process and format.
+  the appropriate file directly. tmux feeds a Rust recorder worker for each
+  pane; the worker fans output into `rotatelogs` without a shell pipeline.
+  Three 10 MiB files are retained per process and format.
 
 From the dnvr repository, the development fixture exposes the same CLI through
 `nix run`. Start its dashboard in one terminal, then query it from another:

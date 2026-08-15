@@ -9,11 +9,6 @@
 }: let
   runnerLib = import ./lib.nix {inherit pkgs lib;};
   processNames = lib.attrNames processes;
-  logRotationSize = "10M";
-  logRotationFiles = 3;
-  logRecorder = ''
-    ${pkgs.coreutils}/bin/tee >(${pkgs.apacheHttpd}/bin/rotatelogs -f -n ${toString logRotationFiles} -L "$1" "$1.rotation" ${logRotationSize}) | ${pkgs.ansifilter}/bin/ansifilter | ${pkgs.apacheHttpd}/bin/rotatelogs -f -n ${toString logRotationFiles} -L "$2" "$2.rotation" ${logRotationSize}
-  '';
 
   sidebar = pkgs.rustPlatform.buildRustPackage {
     pname = "dnvr-tmux-sidebar";
@@ -21,6 +16,16 @@
     src = ./tmux-sidebar;
     cargoLock.lockFile = ./tmux-sidebar/Cargo.lock;
   };
+
+  logRecorderCommand = logName:
+    lib.escapeShellArgs [
+      "${sidebar}/bin/dnvr-tmux-sidebar"
+      "__record"
+      "${pkgs.apacheHttpd}/bin/rotatelogs"
+      "${pkgs.ansifilter}/bin/ansifilter"
+      name
+      logName
+    ];
 
   launchProcesses = lib.concatStringsSep "\n" (lib.imap0 (index: procName: let
       process = processes.${procName};
@@ -53,12 +58,8 @@
         ${lib.escapeShellArg procName}
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_index \
         ${toString index}
-      __log="$__proc_logs/${logName}.log"
-      __plain_log="$__proc_logs/${logName}.plain.log"
-      printf -v __pipe '%q -c %q %q %q %q' \
-        ${pkgs.bash}/bin/bash ${lib.escapeShellArg logRecorder} \
-        dnvr-log-recorder "$__log" "$__plain_log"
-      tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
+      tmux -S "$__socket" pipe-pane -o -t "$__pane" \
+        ${lib.escapeShellArg (logRecorderCommand logName)}
       ${pkgs.coreutils}/bin/touch "$__ready"
     '') processNames);
 
@@ -72,12 +73,8 @@
         | ${pkgs.gawk}/bin/awk -F : -v wanted=${toString index} \
           '$1 == wanted && $3 == 0 { print $2; exit }')
       if [[ -n "$__pane" ]]; then
-        __log="$__proc_logs/${logName}.log"
-        __plain_log="$__proc_logs/${logName}.plain.log"
-        printf -v __pipe '%q -c %q %q %q %q' \
-          ${pkgs.bash}/bin/bash ${lib.escapeShellArg logRecorder} \
-          dnvr-log-recorder "$__log" "$__plain_log"
-        tmux -S "$__socket" pipe-pane -t "$__pane" "$__pipe"
+        tmux -S "$__socket" pipe-pane -t "$__pane" \
+          ${lib.escapeShellArg (logRecorderCommand logName)}
       fi
     '') processNames);
 
@@ -90,7 +87,7 @@
     set-option -g pane-border-status top
     set-option -g pane-border-indicators off
     set-option -g pane-border-format \
-      '#{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
+      '#{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,#{?#{==:#{pane_dead_status},0},Completed,DOWN},UP}}#[default] '
     set-option -g pane-border-style fg=colour238
     set-option -g pane-active-border-style fg=colour238
     set-window-option -g window-size latest

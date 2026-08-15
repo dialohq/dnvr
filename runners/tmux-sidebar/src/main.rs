@@ -1,8 +1,11 @@
 use std::{
     env,
     error::Error,
-    io::{self, Stdout},
-    process::{Command, Output},
+    ffi::OsString,
+    fs,
+    io::{self, Read, Stdout, Write},
+    path::{Path, PathBuf},
+    process::{Child, Command, Output, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -33,6 +36,94 @@ use unicode_width::UnicodeWidthChar;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
+const LOG_ROTATION_SIZE: &str = "10M";
+const LOG_ROTATION_FILES: &str = "3";
+
+fn rotated_path(path: &Path) -> PathBuf {
+    let mut rotated = OsString::from(path.as_os_str());
+    rotated.push(".rotation");
+    PathBuf::from(rotated)
+}
+
+fn spawn_rotatelogs(executable: &Path, active: &Path) -> Result<Child> {
+    Ok(Command::new(executable)
+        .arg("-f")
+        .arg("-n")
+        .arg(LOG_ROTATION_FILES)
+        .arg("-L")
+        .arg(active)
+        .arg(rotated_path(active))
+        .arg(LOG_ROTATION_SIZE)
+        .stdin(Stdio::piped())
+        .spawn()?)
+}
+
+fn recorder(mut args: impl Iterator<Item = OsString>) -> Result<()> {
+    let rotatelogs = PathBuf::from(args.next().ok_or("missing rotatelogs executable")?);
+    let ansifilter = PathBuf::from(args.next().ok_or("missing ansifilter executable")?);
+    let runner = args.next().ok_or("missing runner name")?;
+    let log_name = args.next().ok_or("missing process log name")?;
+    if args.next().is_some() {
+        return Err("unexpected recorder argument".into());
+    }
+
+    let log_dir = PathBuf::from(env::var_os("DNVR_STATE").ok_or("DNVR_STATE is not set")?)
+        .join("logs")
+        .join({
+            let mut directory = OsString::from("tmux-");
+            directory.push(runner);
+            directory
+        });
+    fs::create_dir_all(&log_dir)?;
+
+    let mut raw_name = log_name.clone();
+    raw_name.push(".log");
+    let mut plain_name = log_name;
+    plain_name.push(".plain.log");
+    let raw_path = log_dir.join(raw_name);
+    let plain_path = log_dir.join(plain_name);
+
+    let mut raw = spawn_rotatelogs(&rotatelogs, &raw_path)?;
+    let mut plain = spawn_rotatelogs(&rotatelogs, &plain_path)?;
+    let plain_stdin = plain
+        .stdin
+        .take()
+        .ok_or("rotatelogs stdin is unavailable")?;
+    let mut filter = Command::new(ansifilter)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::from(plain_stdin))
+        .spawn()?;
+
+    let mut raw_stdin = raw.stdin.take().ok_or("rotatelogs stdin is unavailable")?;
+    let mut filter_stdin = filter
+        .stdin
+        .take()
+        .ok_or("ansifilter stdin is unavailable")?;
+    let mut input = io::stdin().lock();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        raw_stdin.write_all(&buffer[..read])?;
+        filter_stdin.write_all(&buffer[..read])?;
+    }
+    drop(raw_stdin);
+    drop(filter_stdin);
+
+    let filter_status = filter.wait()?;
+    let raw_status = raw.wait()?;
+    let plain_status = plain.wait()?;
+    if !filter_status.success() || !raw_status.success() || !plain_status.success() {
+        return Err(format!(
+            "log pipeline failed: ansifilter={filter_status}, raw={raw_status}, plain={plain_status}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn fit_to_width(text: &str, width: usize) -> String {
     let mut rendered = String::new();
     let mut used = 0;
@@ -53,7 +144,34 @@ struct Process {
     index: usize,
     pane: String,
     name: String,
-    dead: bool,
+    state: ProcessState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessState {
+    Up,
+    Completed,
+    Down,
+}
+
+impl ProcessState {
+    fn from_tmux(dead: &str, exit_status: &str) -> Self {
+        if dead != "1" {
+            Self::Up
+        } else if exit_status == "0" {
+            Self::Completed
+        } else {
+            Self::Down
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Up => "UP",
+            Self::Completed => "Completed",
+            Self::Down => "DOWN",
+        }
+    }
 }
 
 fn process_row(process: &Process, marker: &str, selected: bool, name_width: usize) -> Row<'static> {
@@ -62,10 +180,11 @@ fn process_row(process: &Process, marker: &str, selected: bool, name_width: usiz
     } else {
         Style::default()
     };
-    let (status, mut status_style) = if process.dead {
-        ("DOWN", Style::default().fg(Color::LightRed))
-    } else {
-        ("UP", Style::default().fg(Color::LightGreen))
+    let status = process.state.label();
+    let mut status_style = match process.state {
+        ProcessState::Up => Style::default().fg(Color::LightGreen),
+        ProcessState::Completed => Style::default().fg(Color::LightCyan),
+        ProcessState::Down => Style::default().fg(Color::LightRed),
     };
     if selected {
         status_style = status_style.add_modifier(Modifier::REVERSED);
@@ -76,7 +195,7 @@ fn process_row(process: &Process, marker: &str, selected: bool, name_width: usiz
             fit_to_width(&process.name, name_width),
             selected_style,
         )),
-        Cell::from(Span::styled(format!(" {status:>4}"), status_style)),
+        Cell::from(Span::styled(format!(" {status:>9}"), status_style)),
     ])
 }
 
@@ -118,17 +237,22 @@ impl App {
             "-t",
             &self.session_id,
             "-F",
-            "#{@dnvr_index}\t#{pane_id}\t#{@dnvr_name}\t#{pane_dead}",
+            "#{@dnvr_index}\t#{pane_id}\t#{@dnvr_name}\t#{pane_dead}\t#{pane_dead_status}",
         ])?;
         let mut processes = output
             .lines()
             .filter_map(|line| {
-                let mut fields = line.splitn(4, '\t');
+                let mut fields = line.splitn(5, '\t');
+                let index = fields.next()?.parse().ok()?;
+                let pane = fields.next()?.to_owned();
+                let name = fields.next()?.to_owned();
+                let dead = fields.next()?;
+                let exit_status = fields.next()?;
                 Some(Process {
-                    index: fields.next()?.parse().ok()?,
-                    pane: fields.next()?.to_owned(),
-                    name: fields.next()?.to_owned(),
-                    dead: fields.next()? == "1",
+                    index,
+                    pane,
+                    name,
+                    state: ProcessState::from_tmux(dead, exit_status),
                 })
             })
             .collect::<Vec<_>>();
@@ -254,7 +378,7 @@ impl App {
             let visible_rows = process_area.height as usize;
             viewport_height = visible_rows;
             let max_offset = self.processes.len().saturating_sub(visible_rows);
-            let name_width = process_area.width.saturating_sub(7) as usize;
+            let name_width = process_area.width.saturating_sub(12) as usize;
             viewport_offset = viewport_offset.min(max_offset);
             if self.selected < viewport_offset {
                 viewport_offset = self.selected;
@@ -281,7 +405,7 @@ impl App {
                 [
                     Constraint::Length(2),
                     Constraint::Fill(1),
-                    Constraint::Length(5),
+                    Constraint::Length(10),
                 ],
             )
             .column_spacing(0);
@@ -336,7 +460,7 @@ fn tmux_text(args: &[&str]) -> Result<String> {
     Ok(String::from_utf8(tmux(args)?.stdout)?.trim_end().to_owned())
 }
 
-fn main() -> Result<()> {
+fn sidebar() -> Result<()> {
     // tmux's dashboard uses colors regardless of NO_COLOR. Crossterm's
     // NO_COLOR path also turns SetColors into an empty SGR sequence, which
     // resets unrelated modifiers such as the selected row's reverse style.
@@ -392,10 +516,28 @@ fn main() -> Result<()> {
     }
 }
 
+fn main() -> Result<()> {
+    let mut args = env::args_os();
+    let _executable = args.next();
+    if args.next().as_deref() == Some(std::ffi::OsStr::new("__record")) {
+        recorder(args)
+    } else {
+        sidebar()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn maps_tmux_lifecycle_to_process_state() {
+        assert_eq!(ProcessState::from_tmux("0", ""), ProcessState::Up);
+        assert_eq!(ProcessState::from_tmux("1", "0"), ProcessState::Completed);
+        assert_eq!(ProcessState::from_tmux("1", "1"), ProcessState::Down);
+        assert_eq!(ProcessState::from_tmux("1", "127"), ProcessState::Down);
+    }
 
     #[test]
     fn selected_table_row_styles_all_thirty_columns() {
@@ -407,15 +549,15 @@ mod tests {
                     index: 0,
                     pane: "%1".to_owned(),
                     name: "clock".to_owned(),
-                    dead: false,
+                    state: ProcessState::Up,
                 };
-                let rows = [process_row(&process, "●", true, 23)];
+                let rows = [process_row(&process, "●", true, 18)];
                 let table = Table::new(
                     rows,
                     [
                         Constraint::Length(2),
                         Constraint::Fill(1),
-                        Constraint::Length(5),
+                        Constraint::Length(10),
                     ],
                 )
                 .column_spacing(0);
