@@ -9,6 +9,11 @@
 }: let
   runnerLib = import ./lib.nix {inherit pkgs lib;};
   processNames = lib.attrNames processes;
+  logRotationSize = "10M";
+  logRotationFiles = 3;
+  logRecorder = ''
+    ${pkgs.coreutils}/bin/tee >(${pkgs.apacheHttpd}/bin/rotatelogs -f -n ${toString logRotationFiles} -L "$1" "$1.rotation" ${logRotationSize}) | ${pkgs.ansifilter}/bin/ansifilter | ${pkgs.apacheHttpd}/bin/rotatelogs -f -n ${toString logRotationFiles} -L "$2" "$2.rotation" ${logRotationSize}
+  '';
 
   sidebar = pkgs.rustPlatform.buildRustPackage {
     pname = "dnvr-tmux-sidebar";
@@ -50,9 +55,9 @@
         ${toString index}
       __log="$__proc_logs/${logName}.log"
       __plain_log="$__proc_logs/${logName}.plain.log"
-      printf -v __pipe '%q -a %q | %q >> %q' \
-        ${pkgs.coreutils}/bin/tee "$__log" \
-        ${pkgs.ansifilter}/bin/ansifilter "$__plain_log"
+      printf -v __pipe '%q -c %q %q %q %q' \
+        ${pkgs.bash}/bin/bash ${lib.escapeShellArg logRecorder} \
+        dnvr-log-recorder "$__log" "$__plain_log"
       tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
       ${pkgs.coreutils}/bin/touch "$__ready"
     '') processNames);
@@ -69,9 +74,9 @@
       if [[ -n "$__pane" ]]; then
         __log="$__proc_logs/${logName}.log"
         __plain_log="$__proc_logs/${logName}.plain.log"
-        printf -v __pipe '%q -a %q | %q >> %q' \
-          ${pkgs.coreutils}/bin/tee "$__log" \
-          ${pkgs.ansifilter}/bin/ansifilter "$__plain_log"
+        printf -v __pipe '%q -c %q %q %q %q' \
+          ${pkgs.bash}/bin/bash ${lib.escapeShellArg logRecorder} \
+          dnvr-log-recorder "$__log" "$__plain_log"
         tmux -S "$__socket" pipe-pane -t "$__pane" "$__pipe"
       fi
     '') processNames);
