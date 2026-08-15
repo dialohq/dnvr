@@ -357,14 +357,105 @@
     '')
     knownProcs;
 
-  logCases = lib.concatStrings (lib.imap0 (index: n: let
+  logProcessCases = lib.concatStringsSep "\n" (lib.imap0 (index: n: let
     logName = lib.replaceStrings ["/"] ["_"] n;
   in ''
-    ${lib.escapeShellArg n})
-      __dnvr_log="$DNVR_STATE/logs/tmux-${name}-up/${logName}.log"
-      __dnvr_index=${toString index}
-      ;;
+    ${lib.escapeShellArg n} => { index: ${toString index}, log_name: ${lib.escapeShellArg logName} }
   '') knownProcs);
+
+  dnvrLogsCli = let
+    source = pkgs.writeText "dnvr-logs.nu" ''
+      #!${pkgs.nushell}/bin/nu
+
+      def fail [message: string, code: int] {
+        print -e $message
+        exit $code
+      }
+
+      def main [
+        process: string
+        --follow (-f)
+        --tail (-n): int
+        --ansi
+      ] {
+        let state = ($env.DNVR_STATE? | default "")
+        if ($state | is-empty) {
+          fail "DNVR_STATE must be set (run via nix develop)" 1
+        }
+        if $tail != null and $tail < 0 {
+          fail "dnvr logs: line count must be a non-negative integer" 64
+        }
+
+        let info = match $process {
+          ${logProcessCases}
+          _ => { index: -1, log_name: "" }
+        }
+        if $info.index < 0 {
+          fail $"dnvr logs: unknown process '($process)'" 64
+        }
+
+        let socket = $"($state)/runtime/tmux-${name}-up.sock"
+        let log_suffix = if $ansi { ".log" } else { ".plain.log" }
+        let log = $"($state)/logs/tmux-${name}-up/($info.log_name)($log_suffix)"
+        if not ($socket | path exists) {
+          fail $"dnvr logs: no pane for '($process)'; run 'dnvr up' first" 1
+        }
+
+        let panes = (
+          ^${pkgs.tmux}/bin/tmux -S $socket list-panes -s -t =dnvr
+            -F '#{@dnvr_index}:#{pane_id}'
+          | lines
+          | parse '{index}:{pane}'
+        )
+        let pane = (
+          $panes
+          | where index == ($info.index | into string)
+          | get -o 0.pane
+          | default ""
+        )
+        if ($pane | is-empty) {
+          fail $"dnvr logs: no pane for '($process)'; run 'dnvr up' first" 1
+        }
+
+        if $follow {
+          if not ($log | path exists) {
+            fail $"dnvr logs: no log yet for '($process)'" 1
+          }
+          let count = if $tail == null { "+1" } else { $tail | into string }
+          exec ${pkgs.coreutils}/bin/tail -n $count -F $log
+        }
+
+        mut capture_args = [-p -J -S - -t $pane]
+        if $ansi {
+          $capture_args = ([-e] | append $capture_args)
+        }
+        let captured = (^${pkgs.tmux}/bin/tmux -S $socket capture-pane ...$capture_args | complete)
+        if $captured.exit_code != 0 {
+          fail ($captured.stderr | str trim) 1
+        }
+
+        mut rows = ($captured.stdout | split row "\n")
+        if not $ansi {
+          $rows = (
+            $rows
+            | where {|line| not ($line | str starts-with "Pane is dead (status ") }
+            | reverse
+            | skip while {|line| ($line | str trim | is-empty) }
+            | reverse
+          )
+        }
+        if $tail != null {
+          $rows = ($rows | last $tail)
+        }
+        print ($rows | str join "\n")
+      }
+    '';
+  in
+    pkgs.runCommand "dnvr-logs" {nativeBuildInputs = [pkgs.nushell];} ''
+      mkdir -p "$out/bin"
+      install -m 0755 ${source} "$out/bin/dnvr-logs"
+      "$out/bin/dnvr-logs" --help >/dev/null
+    '';
 
   # "api→pg" in listings when api consumes one of pg's keys.
   procLabel = n:
@@ -497,7 +588,7 @@
   dnvrCli = pkgs.writeShellApplication {
     name = "dnvr";
     runtimeInputs =
-      [upScript dnvrState pkgs.flock pkgs.coreutils pkgs.tmux pkgs.gawk pkgs.ansifilter]
+      [upScript dnvrState pkgs.flock pkgs.coreutils dnvrLogsCli]
       ++ scriptPkgs;
     # The help/list/completions bodies are single-quoted on purpose (printf
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
@@ -540,98 +631,7 @@
           ;;
         logs)
           shift
-          __dnvr_follow=false
-          __dnvr_ansi=false
-          __dnvr_lines=
-          while [ "$#" -gt 0 ]; do
-            case "$1" in
-              -f | --follow) __dnvr_follow=true ;;
-              --ansi) __dnvr_ansi=true ;;
-              -n | --tail)
-                [ "$#" -ge 2 ] || {
-                  echo "dnvr logs: $1 needs a line count" >&2
-                  exit 64
-                }
-                __dnvr_lines="$2"
-                shift
-                ;;
-              --tail=*) __dnvr_lines="''${1#*=}" ;;
-              --) shift; break ;;
-              -*)
-                echo "dnvr logs: unknown option '$1'" >&2
-                exit 64
-                ;;
-              *) break ;;
-            esac
-            shift
-          done
-          __dnvr_process="''${1:-}"
-          if [ -z "$__dnvr_process" ] || [ "$#" -ne 1 ]; then
-            echo "usage: dnvr logs [-f|--follow] [-n|--tail LINES] [--ansi] <process>" >&2
-            exit 64
-          fi
-          case "$__dnvr_lines" in
-            *[!0-9]*)
-              echo "dnvr logs: line count must be a non-negative integer" >&2
-              exit 64
-              ;;
-          esac
-          case "$__dnvr_process" in
-            ${logCases}
-            *)
-              echo "dnvr logs: unknown process '$__dnvr_process'" >&2
-              exit 64
-              ;;
-          esac
-          __dnvr_socket="$DNVR_STATE/runtime/tmux-${name}-up.sock"
-          __dnvr_pane=
-          if [ -S "$__dnvr_socket" ]; then
-            __dnvr_pane=$(tmux -S "$__dnvr_socket" list-panes -s -t =dnvr \
-              -F '#{@dnvr_index}:#{pane_id}' 2>/dev/null \
-              | awk -F : -v wanted="$__dnvr_index" '$1 == wanted { print $2; exit }')
-          fi
-          [ -n "$__dnvr_pane" ] || {
-            echo "dnvr logs: no pane for '$__dnvr_process' (run 'dnvr up' first)" >&2
-            exit 1
-          }
-          if "$__dnvr_follow"; then
-            [ -f "$__dnvr_log" ] || {
-              echo "dnvr logs: no log yet for '$__dnvr_process'" >&2
-              exit 1
-            }
-            __dnvr_tail=(-n "''${__dnvr_lines:-+1}" -F)
-            if "$__dnvr_ansi"; then
-              exec tail "''${__dnvr_tail[@]}" "$__dnvr_log"
-            else
-              tail "''${__dnvr_tail[@]}" "$__dnvr_log" | ansifilter
-            fi
-          else
-            __dnvr_capture=(-p -J -S - -t "$__dnvr_pane")
-            "$__dnvr_ansi" && __dnvr_capture=(-e "''${__dnvr_capture[@]}")
-            if "$__dnvr_ansi"; then
-              if [ -n "$__dnvr_lines" ]; then
-                tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                  | tail -n "$__dnvr_lines"
-              else
-                exec tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}"
-              fi
-            else
-              # capture-pane includes unused screen rows and tmux's synthetic
-              # "Pane is dead" footer. Keep real internal blank lines while
-              # trimming that display-only tail from agent-facing output.
-              tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                | awk '
-                    /^Pane is dead \(status [0-9]+,/ { next }
-                    { line[NR] = $0; if ($0 !~ /^[[:space:]]*$/) last = NR }
-                    END { for (i = 1; i <= last; i++) print line[i] }
-                  ' \
-                | if [ -n "$__dnvr_lines" ]; then
-                    tail -n "$__dnvr_lines"
-                  else
-                    cat
-                  fi
-            fi
-          fi
+          exec dnvr-logs "$@"
           ;;
         state)
           shift

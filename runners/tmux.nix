@@ -49,9 +49,31 @@
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_index \
         ${toString index}
       __log="$__proc_logs/${logName}.log"
-      printf -v __pipe '%q >> %q' ${pkgs.coreutils}/bin/cat "$__log"
+      __plain_log="$__proc_logs/${logName}.plain.log"
+      printf -v __pipe '%q -a %q | %q >> %q' \
+        ${pkgs.coreutils}/bin/tee "$__log" \
+        ${pkgs.ansifilter}/bin/ansifilter "$__plain_log"
       tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
       ${pkgs.coreutils}/bin/touch "$__ready"
+    '') processNames);
+
+  # Existing sessions may predate the plain agent log. Replacing pipe-pane's
+  # output command on attach upgrades the tap without touching the process PTY.
+  configureProcessLogs = lib.concatStringsSep "\n" (lib.imap0 (index: procName: let
+      logName = lib.replaceStrings ["/"] ["_"] procName;
+    in ''
+      __pane=$(tmux -S "$__socket" list-panes -s -t "=$__session" \
+        -F '#{@dnvr_index}:#{pane_id}:#{pane_dead}' \
+        | ${pkgs.gawk}/bin/awk -F : -v wanted=${toString index} \
+          '$1 == wanted && $3 == 0 { print $2; exit }')
+      if [[ -n "$__pane" ]]; then
+        __log="$__proc_logs/${logName}.log"
+        __plain_log="$__proc_logs/${logName}.plain.log"
+        printf -v __pipe '%q -a %q | %q >> %q' \
+          ${pkgs.coreutils}/bin/tee "$__log" \
+          ${pkgs.ansifilter}/bin/ansifilter "$__plain_log"
+        tmux -S "$__socket" pipe-pane -t "$__pane" "$__pipe"
+      fi
     '') processNames);
 
   tmuxConfig = pkgs.writeText "dnvr-tmux.conf" ''
@@ -134,7 +156,10 @@ in
         fi
         __sidebar_pid=$(tmux -S "$__socket" display-message -p \
           -t "$__sidebar" '#{@dnvr_sidebar_pid}')
+        __proc_logs="$DNVR_STATE/logs/tmux-${name}"
+        mkdir -p "$__proc_logs"
         ${configureSession}
+        ${configureProcessLogs}
         exec tmux -S "$__socket" attach-session -t "=$__session"
       fi
     '';
