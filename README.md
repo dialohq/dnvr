@@ -23,6 +23,9 @@ persistent, sidebar-first tmux dashboard.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     dnvr.url = "github:dialohq/dnvr";
+    # dnvr pins its own nixpkgs (nixos-26.05) and builds everything from
+    # it; follows swaps in yours instead.
+    dnvr.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs = inputs:
@@ -404,7 +407,7 @@ plain value once a handler for it exists.
 
 ## Without flake-parts
 
-`dnvr.lib.mkDevShells` takes a module: everything except `pkgs`,
+`dnvr.lib.mkDevShells` takes a module: everything except `system`,
 `specialArgs`, and the optional `presets`/`extraRunners` registries is
 module config, so `imports` and `dnvr.shells.<name>` sit at the top
 level exactly as they do under flake-parts' `perSystem`. Plain flake:
@@ -412,13 +415,12 @@ level exactly as they do under flake-parts' `perSystem`. Plain flake:
 ```nix
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     dnvr.url = "github:dialohq/dnvr";
   };
 
-  outputs = {nixpkgs, dnvr, ...}: {
+  outputs = {dnvr, ...}: {
     devShells.aarch64-darwin = dnvr.lib.mkDevShells {
-      pkgs = nixpkgs.legacyPackages.aarch64-darwin;
+      system = "aarch64-darwin";
       imports = [./shells.nix];
     };
   };
@@ -440,10 +442,10 @@ level exactly as they do under flake-parts' `perSystem`. Plain flake:
 flake-utils, same call inside the loop:
 
 ```nix
-outputs = {nixpkgs, flake-utils, dnvr, ...}:
+outputs = {flake-utils, dnvr, ...}:
   flake-utils.lib.eachDefaultSystem (system: {
     devShells = dnvr.lib.mkDevShells {
-      pkgs = nixpkgs.legacyPackages.${system};
+      inherit system;
       imports = [./shells.nix];
     };
   });
@@ -461,7 +463,7 @@ equivalent `dnvr.specialArgs` starts at the `dnvr.shells.<name>` level
 (the perSystem module's own args belong to flake-parts), so a module
 meant to move between both setups should destructure custom args in
 the shell module, not the file head. The picker is flake-parts-only.
-For full control, `dnvr.lib.mkDnvr {inherit pkgs;}` returns
+For full control, `dnvr.lib.mkDnvr {inherit system;}` returns
 `{mkShells, mkScript, runners, presets, dnvrState}` (also takes
 `specialArgs`), where `mkShells [module1 module2]` returns
 `{devShells, ups, config}`.
