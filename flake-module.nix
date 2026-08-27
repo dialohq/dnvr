@@ -1,4 +1,4 @@
-{
+nixpkgs: {
   lib,
   flake-parts-lib,
   ...
@@ -8,12 +8,13 @@ in {
   options = {
     perSystem = flake-parts-lib.mkPerSystemOption ({
       config,
-      pkgs,
+      system,
       lib,
       ...
     }: let
+      pkgs = nixpkgs.legacyPackages.${system};
       framework = import ./. {
-        inherit pkgs lib;
+        inherit pkgs;
         inherit (config.dnvr) extraRunners presets specialArgs;
       };
     in {
