@@ -62,6 +62,16 @@
       ${config.extraConfigXml}
     </clickhouse>
   '';
+
+  clientConfigXml = pkgs.writeText "${name}-clickhouse-client.xml" ''
+    <?xml version="1.0"?>
+    <config>
+      <user>default</user>
+      <password></password>
+      <secure>false</secure>
+      <database>default</database>
+    </config>
+  '';
 in {
   options = {
     database = mkOption {
@@ -218,13 +228,14 @@ in {
 
         # Wait for readiness, ensure the configured database exists, then
         # publish it — `dnvr://<name>/database` refs unblock only here.
-        ${presetLib.untilReady {
+      ${presetLib.untilReady {
         pid = "$CH_PID";
-        check = ''clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" --query "SELECT 1" >/dev/null 2>&1'';
+        check = ''clickhouse-client --config-file=${clientConfigXml} --host "${hostAddr}" --port "''$${config.tcpPortEnv}" --query "SELECT 1" >/dev/null 2>&1'';
         onDead = "[${name}] clickhouse exited before becoming ready";
         interval = "0.2";
       }}
-        clickhouse-client --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
+        clickhouse-client --config-file=${clientConfigXml} \
+          --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
           --query 'CREATE DATABASE IF NOT EXISTS "${config.database}"'
         dnvr-state set database ${lib.escapeShellArg config.database}
         echo "[${name}] ready — database ${config.database} on tcp ''$${config.tcpPortEnv} / http ''$${config.httpPortEnv}"
