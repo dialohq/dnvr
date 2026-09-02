@@ -63,15 +63,7 @@
     </clickhouse>
   '';
 
-  clientConfigXml = pkgs.writeText "${name}-clickhouse-client.xml" ''
-    <?xml version="1.0"?>
-    <config>
-      <user>default</user>
-      <password></password>
-      <secure>false</secure>
-      <database>default</database>
-    </config>
-  '';
+  clientConfigFile = pkgs.writeText "${name}-clickhouse-client.xml" config.clientConfigXml;
 in {
   options = {
     database = mkOption {
@@ -139,6 +131,22 @@ in {
       type = types.lines;
       default = "";
       description = "Raw XML injected into the server config, inside <clickhouse>.";
+    };
+    clientConfigXml = mkOption {
+      type = types.lines;
+      default = ''
+        <?xml version="1.0"?>
+        <config>
+          <user>default</user>
+          <password></password>
+          <secure>false</secure>
+          <database>default</database>
+        </config>
+      '';
+      description = ''
+        Complete ClickHouse Client XML configuration used by the preset's
+        readiness probe and database creation command.
+      '';
     };
 
     # Computed, read-only. Static strings usable anywhere in config — no
@@ -230,11 +238,11 @@ in {
         # publish it — `dnvr://<name>/database` refs unblock only here.
       ${presetLib.untilReady {
         pid = "$CH_PID";
-        check = ''clickhouse-client --config-file=${clientConfigXml} --host "${hostAddr}" --port "''$${config.tcpPortEnv}" --query "SELECT 1" >/dev/null 2>&1'';
+        check = ''clickhouse-client --config-file=${clientConfigFile} --host "${hostAddr}" --port "''$${config.tcpPortEnv}" --query "SELECT 1" >/dev/null 2>&1'';
         onDead = "[${name}] clickhouse exited before becoming ready";
         interval = "0.2";
       }}
-        clickhouse-client --config-file=${clientConfigXml} \
+        clickhouse-client --config-file=${clientConfigFile} \
           --host "${hostAddr}" --port "''$${config.tcpPortEnv}" \
           --query 'CREATE DATABASE IF NOT EXISTS "${config.database}"'
         dnvr-state set database ${lib.escapeShellArg config.database}
