@@ -538,7 +538,16 @@
           printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS
           ${psRows}
           ;;
-        logs)
+      ${
+        if knownProcs == []
+        then ''
+          logs)
+            echo "dnvr logs: no processes configured" >&2
+            exit 1
+            ;;
+        ''
+        else ''
+          logs)
           shift
           __dnvr_follow=false
           __dnvr_ansi=false
@@ -633,6 +642,8 @@
             fi
           fi
           ;;
+        ''
+      }
         state)
           shift
           exec dnvr-state "$@"
