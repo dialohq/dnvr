@@ -17,6 +17,16 @@
     cargoLock.lockFile = ./tmux-sidebar/Cargo.lock;
   };
 
+  # Start the sidebar only after every process pane and its metadata exist,
+  # so its first reload renders the complete list. Previously it started as
+  # the session's first pane and remained empty until another event woke it.
+  sidebarStart = ''
+    while [[ ! -e "$DNVR_STATE/logs/tmux-${name}/.sidebar-ready" ]]; do
+      ${pkgs.coreutils}/bin/sleep 0.01
+    done
+    exec ${sidebar}/bin/dnvr-tmux-sidebar
+  '';
+
   launchProcesses = lib.concatStringsSep "\n" (lib.imap0 (index: procName: let
       process = processes.${procName};
       command = runnerLib.resolveCommand procName process;
@@ -66,7 +76,11 @@
       '#{?pane_active,#[fg=cyan],#[fg=colour244]}#{?#{==:#{@dnvr_role},sidebar},Processes,#{@dnvr_name} #{?pane_dead,DOWN,UP}}#[default] '
     set-option -g pane-border-style fg=colour238
     set-option -g pane-active-border-style fg=colour238
-    set-window-option -g window-size latest
+    # Keep sizing under the client-resized hook below. With `latest`, tmux
+    # schedules the window resize for a later server tick, redraws the client
+    # at the old geometry, and only then lets window-resized restore the fixed
+    # sidebar. That intermediate frame is the visible horizontal-resize flash.
+    set-window-option -g window-size manual
     set-window-option -g main-pane-width 30
     set-option -g default-shell ${pkgs.bash}/bin/bash
     set-option -s escape-time 0
@@ -74,23 +88,31 @@
     set-option -g prefix2 None
 
     bind-key -n C-g detach-client
-    bind-key -n C-a select-pane -t '#{@dnvr_sidebar}' \; \
-      run-shell '${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}'
-
-    set-hook -g pane-died \
-      'run-shell "${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}"'
-    set-hook -g client-attached \
-      'select-layout -t "=dnvr:dashboard" main-vertical ; run-shell "${pkgs.coreutils}/bin/kill -USR1 #{@dnvr_sidebar_pid}"'
-    set-hook -g client-resized \
-      'select-layout -t "=dnvr:dashboard" main-vertical'
   '';
 
   configureSession = ''
-    # Runtime identities are the only imperative configuration. The config
-    # resolves these user options when a binding or hook actually fires.
-    tmux -S "$__socket" set-option -g @dnvr_sidebar "$__sidebar"
-    tmux -S "$__socket" set-option -g @dnvr_sidebar_pid "$__sidebar_pid"
     tmux -S "$__socket" source-file ${tmuxConfig}
+    # Bind concrete runtime identities on every attach. Looking them up as
+    # user options when a binding fires depends on its pane/window context
+    # and can occasionally resolve to an invalid pane target.
+    tmux -S "$__socket" bind-key -n C-a \
+      "select-pane -t '$__sidebar' ; run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+    tmux -S "$__socket" set-hook -g pane-died \
+      "run-shell '${pkgs.coreutils}/bin/kill -USR1 $__sidebar_pid'"
+    # Clear hooks installed by older runners. The pane screen is retained
+    # while detached, so forcing another Rust redraw on attach only flashes
+    # an identical frame.
+    tmux -S "$__socket" set-hook -gu client-attached
+    # In manual mode tmux does not asynchronously resize this window before
+    # the hook runs. Apply the attached client geometry and restore the
+    # divider in one command queue, before tmux paints the next client frame.
+    # `resize-window -A` is used instead of client_width/client_height: tmux
+    # 3.7c does not retain those formats in a client-resized hook's command
+    # context. With one client this is its exact size; with several, keeping
+    # the largest viewport avoids clipping the others.
+    tmux -S "$__socket" set-hook -gu window-resized
+    tmux -S "$__socket" set-hook -g client-resized \
+      "resize-window -A -t '=$__session:dashboard' ; resize-pane -t '$__sidebar' -x 30"
   '';
 in
   runnerLib.mkUpScript {
@@ -104,8 +126,7 @@ in
       __session=dnvr
       if tmux -S "$__socket" has-session -t "=$__session" 2>/dev/null; then
         __sidebar=$(tmux -S "$__socket" list-panes -s -t "=$__session" \
-          -F '#{@dnvr_role}\t#{pane_id}' \
-          | ${pkgs.gawk}/bin/awk -F '\t' '$1 == "sidebar" { print $2; exit }')
+          -f '#{==:#{@dnvr_role},sidebar}' -F '#{pane_id}')
         __sidebar_command=${sidebar}/bin/dnvr-tmux-sidebar
         __running_sidebar_command=$(tmux -S "$__socket" display-message -p \
           -t "$__sidebar" '#{@dnvr_sidebar_command}')
@@ -135,6 +156,15 @@ in
         __sidebar_pid=$(tmux -S "$__socket" display-message -p \
           -t "$__sidebar" '#{@dnvr_sidebar_pid}')
         ${configureSession}
+        # Bring a detached session to this terminal's geometry before it is
+        # visible. Otherwise tmux attaches at the old width and corrects it a
+        # frame later, exposing the sidebar's stale narrow/wide buffer.
+        if read -r __rows __cols < <(${pkgs.coreutils}/bin/stty size 2>/dev/null) \
+          && (( __rows >= 2 && __cols >= 32 )); then
+          tmux -S "$__socket" resize-window -t "=$__session:dashboard" \
+            -x "$__cols" -y "$__rows"
+          tmux -S "$__socket" resize-pane -t "$__sidebar" -x 30
+        fi
         exec tmux -S "$__socket" attach-session -t "=$__session"
       fi
     '';
@@ -144,6 +174,8 @@ in
       __session=dnvr
       __proc_logs="$DNVR_STATE/logs/tmux-${name}"
       mkdir -p "$__proc_logs"
+      __sidebar_gate="$__proc_logs/.sidebar-ready"
+      ${pkgs.coreutils}/bin/rm -f "$__sidebar_gate"
 
       # A detached tmux server otherwise starts at 80x24 and proportionally
       # stretches that layout when the first real client attaches. Seed it
@@ -160,13 +192,14 @@ in
 
       tmux -S "$__socket" -f ${tmuxConfig} new-session -d \
         -x "$__cols" -y "$__rows" -s "$__session" -n dashboard \
-        ${sidebar}/bin/dnvr-tmux-sidebar
+        ${lib.escapeShellArg sidebarStart}
       __sidebar=$(tmux -S "$__socket" display-message -p \
         -t "=$__session:dashboard.0" '#{pane_id}')
       tmux -S "$__socket" set-option -p -t "$__sidebar" @dnvr_role sidebar
       tmux -S "$__socket" set-option -p -t "$__sidebar" @dnvr_name Processes
-      tmux -S "$__socket" set-option -p -t "$__sidebar" \
-        @dnvr_sidebar_command ${sidebar}/bin/dnvr-tmux-sidebar
+
+      ${launchProcesses}
+      ${pkgs.coreutils}/bin/touch "$__sidebar_gate"
 
       __sidebar_ready=false
       for ((i = 0; i < 100; i++)); do
@@ -183,10 +216,10 @@ in
       fi
       __sidebar_pid=$(tmux -S "$__socket" display-message -p \
         -t "$__sidebar" '#{@dnvr_sidebar_pid}')
+      tmux -S "$__socket" set-option -p -t "$__sidebar" \
+        @dnvr_sidebar_command ${sidebar}/bin/dnvr-tmux-sidebar
 
       ${configureSession}
-
-      ${launchProcesses}
 
       ${lib.optionalString (processNames != []) ''
         tmux -S "$__socket" select-layout -t "=$__session:dashboard" main-vertical

@@ -7,7 +7,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -32,6 +32,9 @@ use signal_hook::consts::signal::SIGUSR1;
 use unicode_width::UnicodeWidthChar;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
+const INPUT_POLL: Duration = Duration::from_millis(100);
+const RESIZE_SETTLE: Duration = Duration::from_millis(16);
 
 fn fit_to_width(text: &str, width: usize) -> String {
     let mut rendered = String::new();
@@ -370,24 +373,48 @@ fn main() -> Result<()> {
         "1",
     ])?;
 
+    let mut redraw_pending = false;
+    let mut resize_pending = None;
+    let mut rendered_width = terminal.size()?.width;
     loop {
-        let mut redraw = refresh.swap(false, Ordering::Relaxed);
-        if redraw {
+        if refresh.swap(false, Ordering::Relaxed) {
             app.reload()?;
+            redraw_pending = true;
         }
-        if event::poll(Duration::from_millis(100))? {
+        let poll_timeout = resize_pending
+            .map(|started: Instant| RESIZE_SETTLE.saturating_sub(started.elapsed()))
+            .unwrap_or(INPUT_POLL);
+        if event::poll(poll_timeout)? {
             match event::read()? {
-                Event::Key(key) => redraw |= app.handle_key(key)?,
-                Event::Mouse(mouse) => redraw |= app.click(mouse)?,
-                Event::Resize(_, _) => {
+                Event::Key(key) => redraw_pending |= app.handle_key(key)?,
+                Event::Mouse(mouse) => redraw_pending |= app.click(mouse)?,
+                Event::Resize(width, _) if width == rendered_width => {
+                    // A width-changing window resize briefly stretches this
+                    // pane before the tmux hook restores its fixed width. Do
+                    // not paint that intermediate geometry; the restored
+                    // width arrives as the next event. Height-only resizes
+                    // still redraw immediately.
+                    resize_pending = None;
                     terminal.autoresize()?;
-                    redraw = true;
+                    redraw_pending = true;
+                }
+                Event::Resize(_, _) => {
+                    resize_pending = Some(Instant::now());
                 }
                 _ => {}
             }
         }
-        if redraw {
+        if resize_pending.is_some_and(|started| started.elapsed() >= RESIZE_SETTLE) {
+            // If tmux cannot restore the requested width (for example in a
+            // very narrow terminal), render the actual size after one frame.
+            resize_pending = None;
+            terminal.autoresize()?;
+            redraw_pending = true;
+        }
+        if redraw_pending && resize_pending.is_none() {
             app.draw(&mut terminal)?;
+            rendered_width = terminal.size()?.width;
+            redraw_pending = false;
         }
     }
 }
