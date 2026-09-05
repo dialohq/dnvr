@@ -85,11 +85,27 @@ Every devshell carries a `dnvr` command scoped to its shell:
 ```console
 $ dnvr --help     # everything in this shell: commands, descriptions
 $ dnvr up         # launch the process group
+$ dnvr up --env api.CONFIG_FILE=/tmp/test.json
 $ dnvr ps         # process status: pid + liveness per process
 $ dnvr logs api   # plain-text snapshot of api's retained scrollback
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
+
+`dnvr up` accepts repeatable, process-scoped environment overrides:
+
+```console
+$ dnvr up \
+    --env clickhouse.CONFIG_FILE=/tmp/first.xml \
+    --env replica.CONFIG_FILE=/tmp/second.xml
+```
+
+The part before the dot is the dnvr process name. The same environment
+variable can therefore have a different value in every process. Values may be
+literal strings or `dnvr://process/key` references; references are resolved by
+the target process when it starts. A later occurrence of the same
+`process.VARIABLE` replaces the earlier one. Overrides cannot change an
+already-running process group.
 
 ### Persistent process dashboard
 
@@ -111,6 +127,49 @@ place without restarting the process panes.
   text for humans and agents. `--ansi` preserves colors, `-n <lines>` limits
   the snapshot, and `-f` follows the full-session archive.
 - Raw process output is also appended under `.dnvr/logs/tmux-<shell>-up/`.
+
+#### Sidebar REST API
+
+The sidebar listens on a random loopback TCP port and publishes its URL in the
+tmux session option `@dnvr_sidebar_api_url`. Discover it from another terminal
+using the shell's tmux socket:
+
+```console
+$ socket="$DNVR_STATE/runtime/tmux-<shell>-up.sock"
+$ api=$(tmux -S "$socket" show-option -gv @dnvr_sidebar_api_url)
+$ curl "$api/v1/health"
+{"status":"ok"}
+```
+
+The API lists every live or exited tmux pane tagged as a dnvr process, with its
+name, stable index, pane ID, PID, running state, current command, and exit code:
+
+```console
+$ curl "$api/v1/processes"
+{"processes":[{"name":"api","index":0,"pane":"%1","pid":1234,"running":true,"command":"api","exitCode":null}]}
+```
+
+Process names are URL-encoded path parameters. Restart or interrupt one process,
+or stop the entire dnvr session, with POST requests:
+
+```console
+$ curl -X POST "$api/v1/processes/api/restart"
+{"status":"ok"}
+$ curl -X POST "$api/v1/processes/api/interrupt"
+{"status":"ok"}
+$ curl -X POST "$api/v1/stop"
+{"status":"stopping"}
+```
+
+Restart uses tmux's `respawn-pane -k`, interrupt sends `C-c`, and stop has the
+same group-wide behavior as pressing `Q` in the sidebar. Stop returns `202
+Accepted` before terminating the tmux session and its API server.
+
+The result is collected from tmux when the request arrives rather than cached
+in the HTTP thread. The listener defaults to `127.0.0.1:0`; set
+`DNVR_SIDEBAR_API_ADDRESS` before `dnvr up` to select a specific loopback
+address. The API has no authentication and should not be bound to a
+non-loopback interface.
 
 From the dnvr repository, the development fixture exposes the same CLI through
 `nix run`. Start its dashboard in one terminal, then query it from another:

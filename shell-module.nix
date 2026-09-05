@@ -162,6 +162,31 @@
       export ${var}
     '';
 
+  # Keep dnvr refs as values until the process actually starts. This lets the
+  # launch environment replace a declared ref with either a literal or a
+  # different dnvr:// target before any wait occurs.
+  procResolveDnvrRef = var: default: ''
+    if [[ ! -v ${var} ]]; then
+      export ${var}=${lib.escapeShellArg default}
+    fi
+    if [[ "''$${var}" == dnvr://* ]]; then
+      __dnvr_ref="''$${var}"
+      __dnvr_target="''${__dnvr_ref#dnvr://}"
+      if [[ "$__dnvr_target" != */* ]]; then
+        echo "dnvr: malformed reference for ${var}: $__dnvr_ref" >&2
+        exit 1
+      fi
+      __dnvr_process="''${__dnvr_target%%/*}"
+      __dnvr_key="''${__dnvr_target#*/}"
+      if [[ ! "$__dnvr_process" =~ ^[A-Za-z0-9_-]+$ || ! "$__dnvr_key" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo "dnvr: malformed reference for ${var}: $__dnvr_ref" >&2
+        exit 1
+      fi
+      ${var}="$(dnvr-state wait "$__dnvr_process.$__dnvr_key" --timeout 120)"
+      export ${var}
+    fi
+  '';
+
   # At shell entry resolution is best-effort: warn and skip on failure.
   entryResolveRef = var: v: let
     r = parseRef v;
@@ -255,7 +280,13 @@
 
   wrapProcess = procName: p: let
     refs = processRefs.${procName};
-    resolveRefs = lib.concatStrings (lib.mapAttrsToList procResolveRef refs);
+    resolveRefs = lib.concatStrings (lib.mapAttrsToList (
+        var: value:
+          if (parseRef value).scheme == "dnvr"
+          then procResolveDnvrRef var value
+          else procResolveRef var value
+      )
+      refs);
     handlerInputs =
       lib.unique (lib.concatMap (v: (parseRef v).handler.runtimeInputs) (lib.attrValues refs));
     wrapped =
@@ -681,7 +712,7 @@
     rows =
       [
         {
-          name = "dnvr up";
+          name = "dnvr up [--env process.VARIABLE=value]...";
           desc = "launch process group";
         }
       ]
