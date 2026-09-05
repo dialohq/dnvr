@@ -31,7 +31,9 @@ use ratatui::{
 use signal_hook::consts::signal::SIGUSR1;
 use unicode_width::UnicodeWidthChar;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+mod api;
 
 fn fit_to_width(text: &str, width: usize) -> String {
     let mut rendered = String::new();
@@ -346,6 +348,7 @@ fn main() -> Result<()> {
     signal_hook::flag::register(SIGUSR1, Arc::clone(&refresh))?;
 
     let mut app = App::new()?;
+    api::start(&app.session_id, Arc::clone(&refresh))?;
     tmux(&[
         "set-option",
         "-p",
