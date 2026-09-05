@@ -32,16 +32,24 @@
         if index == 0
         then ''
           __pane=$(tmux -S "$__socket" split-window -h -d -P -F '#{pane_id}' \
-            -t "$__sidebar" ${lib.escapeShellArg guardedCommand})
+            "''${__pane_env[@]}" -t "$__sidebar" \
+            ${lib.escapeShellArg guardedCommand})
         ''
         else ''
           __pane=$(tmux -S "$__socket" new-window -d -P -F '#{pane_id}' \
-            -t "=$__session:" -n ${lib.escapeShellArg procName} \
-            ${lib.escapeShellArg guardedCommand})
+            "''${__pane_env[@]}" -t "=$__session:" \
+            -n ${lib.escapeShellArg procName} ${lib.escapeShellArg guardedCommand})
         '';
     in ''
       __ready="$__proc_logs/${readyName}"
       ${pkgs.coreutils}/bin/rm -f "$__ready"
+      __pane_env=()
+      for __override_key in "''${!__dnvr_env_overrides[@]}"; do
+        if [[ "$__override_key" == ${lib.escapeShellArg procName}.* ]]; then
+          __override_var="''${__override_key#*.}"
+          __pane_env+=(-e "$__override_var=''${__dnvr_env_overrides[$__override_key]}")
+        fi
+      done
       ${launch}
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_role process
       tmux -S "$__socket" set-option -p -t "$__pane" @dnvr_name \
@@ -52,7 +60,8 @@
       printf -v __pipe '%q >> %q' ${pkgs.coreutils}/bin/cat "$__log"
       tmux -S "$__socket" pipe-pane -o -t "$__pane" "$__pipe"
       ${pkgs.coreutils}/bin/touch "$__ready"
-    '') processNames);
+    '')
+    processNames);
 
   tmuxConfig = pkgs.writeText "dnvr-tmux.conf" ''
     set-option -g status off
@@ -100,9 +109,69 @@ in
     # The socket is scoped by DNVR_STATE, so a fixed session name is enough and
     # avoids tmux's punctuation restrictions on session names.
     reattach = ''
+      declare -A __dnvr_env_overrides=()
+      while (( $# > 0 )); do
+        case "$1" in
+          --env)
+            if (( $# < 2 )); then
+              echo "dnvr up: --env requires process.VARIABLE=value" >&2
+              exit 64
+            fi
+            __override=$2
+            shift 2
+            ;;
+          --env=*)
+            __override="''${1#*=}"
+            shift
+            ;;
+          *)
+            echo "dnvr up: unknown argument '$1'" >&2
+            exit 64
+            ;;
+        esac
+
+        if [[ "$__override" != *=* ]]; then
+          echo "dnvr up: invalid --env '$__override' (expected process.VARIABLE=value)" >&2
+          exit 64
+        fi
+        __override_name="''${__override%%=*}"
+        __override_value="''${__override#*=}"
+        if [[ "$__override_name" != *.* ]]; then
+          echo "dnvr up: invalid --env '$__override' (expected process.VARIABLE=value)" >&2
+          exit 64
+        fi
+        __override_process="''${__override_name%%.*}"
+        __override_var="''${__override_name#*.}"
+        ${
+        if processNames == []
+        then ''
+          echo "dnvr up: unknown process '$__override_process'" >&2
+          exit 64
+        ''
+        else ''
+          case "$__override_process" in
+            ${lib.concatMapStringsSep " | " lib.escapeShellArg processNames}) ;;
+            *)
+              echo "dnvr up: unknown process '$__override_process'" >&2
+              exit 64
+              ;;
+          esac
+        ''
+      }
+        if [[ ! "$__override_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+          echo "dnvr up: invalid environment variable '$__override_var'" >&2
+          exit 64
+        fi
+        __dnvr_env_overrides["$__override_name"]="$__override_value"
+      done
+
       __socket="$DNVR_STATE/runtime/tmux-${name}.sock"
       __session=dnvr
       if tmux -S "$__socket" has-session -t "=$__session" 2>/dev/null; then
+        if (( ''${#__dnvr_env_overrides[@]} > 0 )); then
+          echo "dnvr up: --env cannot change an already-running process group" >&2
+          exit 1
+        fi
         __sidebar=$(tmux -S "$__socket" list-panes -s -t "=$__session" \
           -F '#{@dnvr_role}\t#{pane_id}' \
           | ${pkgs.gawk}/bin/awk -F '\t' '$1 == "sidebar" { print $2; exit }')

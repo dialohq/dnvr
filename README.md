@@ -85,11 +85,27 @@ Every devshell carries a `dnvr` command scoped to its shell:
 ```console
 $ dnvr --help     # everything in this shell: commands, descriptions
 $ dnvr up         # launch the process group
+$ dnvr up --env api.CONFIG_FILE=/tmp/test.json
 $ dnvr ps         # process status: pid + liveness per process
 $ dnvr logs api   # plain-text snapshot of api's retained scrollback
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
+
+`dnvr up` accepts repeatable, process-scoped environment overrides:
+
+```console
+$ dnvr up \
+    --env clickhouse.CONFIG_FILE=/tmp/first.xml \
+    --env replica.CONFIG_FILE=/tmp/second.xml
+```
+
+The part before the dot is the dnvr process name. The same environment
+variable can therefore have a different value in every process. Values may be
+literal strings or `dnvr://process/key` references; references are resolved by
+the target process when it starts. A later occurrence of the same
+`process.VARIABLE` replaces the earlier one. Overrides cannot change an
+already-running process group.
 
 ### Persistent process dashboard
 
