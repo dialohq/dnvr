@@ -121,7 +121,8 @@ place without restarting the process panes.
   `Enter` enters its pane; `●` means shown and `▶` means interactive.
 - Clicking a process opens it; tmux mouse selection and log scrolling work.
 - `Ctrl-A` returns focus to the sidebar; `Ctrl-G` detaches cleanly.
-- `r` restarts and `x` interrupts the selected process; `Q` stops the group.
+- `r` restarts preserving process state; `R` wipes runtime state and restarts.
+  `x` interrupts the selected process; `Q` stops the group.
 - Running `dnvr up` again reattaches to the existing session.
 - `dnvr logs <process>` dumps the entire retained tmux scrollback as plain
   text for humans and agents. `--ansi` preserves colors, `-n <lines>` limits
@@ -155,13 +156,17 @@ or stop the entire dnvr session, with POST requests:
 ```console
 $ curl -X POST "$api/v1/processes/api/restart"
 {"status":"ok"}
+$ curl -X POST "$api/v1/processes/api/restart?wipeState=false"
+{"status":"ok"}
 $ curl -X POST "$api/v1/processes/api/interrupt"
 {"status":"ok"}
 $ curl -X POST "$api/v1/stop"
 {"status":"stopping"}
 ```
 
-Restart uses tmux's `respawn-pane -k`, interrupt sends `C-c`, and stop has the
+Restart kills the pane process group and respawns it. By default the API wipes
+that process's runtime values; `wipeState=false` preserves them. Neither mode
+deletes service data outside the process runtime directory. Interrupt sends `C-c`, and stop has the
 same group-wide behavior as pressing `Q` in the sidebar. Stop returns `202
 Accepted` before terminating the tmux session and its API server.
 
@@ -305,16 +310,23 @@ $ dnvr-state set port 5432          # publish to own scope
 $ dnvr-state get pg.socketDir       # read a live value (fails if pg is down)
 $ dnvr-state wait pg.socketDir      # block until pg is up and it's published
 $ dnvr-state pick-port              # random free TCP port
+$ dnvr-state pick-port port         # reuse own saved port, or allocate and save it
 $ dnvr-state dump                   # list everything published
 ```
 
 **A key is stale if it is readable while its producer is not alive** —
 that one rule is the whole model. Every process holds an exclusive
 `flock` on its `pid` file for life (the kernel drops the lock on
-death, SIGKILL included) and wipes its own keys as it claims it, so
-lock held + key present always means the current incarnation's value.
-`get` and `wait` both require exactly that; `wait` simply blocks until
-it becomes true, riding out producer restarts, bounded by its timeout.
+death, SIGKILL included). Ordinary launches and wiping restarts clear its own
+keys as it claims the lock. State-preserving restarts retain those keys.
+Named port allocations are ordinary keys in the same process runtime directory;
+they survive preserving restarts and are cleared by wiping restarts. An allocation
+remembers a number, not a socket reservation. A reused port occupied by another
+application will cause the service's bind to fail.
+`get` and `wait` require the process lock and key presence; `wait` blocks until
+both hold, bounded by its timeout. They do not check service health. On a
+state-preserving restart, an old key is available as soon as the new wrapper
+holds its lock, before the server necessarily becomes healthy.
 `dnvr ps` reads the same lock — a recycled pid can never read as
 running: `running` (locked), `exited` (pid on record, lock released),
 `stopped` (never launched). Nothing else owns or deletes state — the

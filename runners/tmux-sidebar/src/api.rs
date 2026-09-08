@@ -10,7 +10,7 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -133,9 +133,15 @@ fn process_pane(session_id: &str, name: &str) -> Result<Option<String>> {
         .map(|process| process.pane))
 }
 
-fn restart_process(pane: &str) -> Result<()> {
-    tmux(&["respawn-pane", "-k", "-t", pane])?;
-    Ok(())
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestartOptions {
+    #[serde(default = "default_wipe_state")]
+    wipe_state: bool,
+}
+
+fn default_wipe_state() -> bool {
+    true
 }
 
 fn interrupt_process(pane: &str) -> Result<()> {
@@ -146,7 +152,7 @@ fn interrupt_process(pane: &str) -> Result<()> {
 async fn process_action(
     state: AppState,
     name: String,
-    action: fn(&str) -> Result<()>,
+    action: impl FnOnce(&str) -> Result<()> + Send + 'static,
 ) -> std::result::Result<Json<StatusResponse>, ApiError> {
     let refresh = Arc::clone(&state.refresh);
     let process_found = tokio::task::spawn_blocking({
@@ -173,8 +179,12 @@ async fn process_action(
 async fn restart(
     State(state): State<AppState>,
     Path(name): Path<String>,
+    Query(options): Query<RestartOptions>,
 ) -> std::result::Result<Json<StatusResponse>, ApiError> {
-    process_action(state, name, restart_process).await
+    process_action(state, name, move |pane| {
+        super::restart_process(pane, options.wipe_state)
+    })
+    .await
 }
 
 async fn interrupt(

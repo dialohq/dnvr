@@ -250,7 +250,9 @@
   # runs BEFORE the pid lock is taken, readers — which trust a key only
   # under a held pid lock — can never observe a stale key as live: every
   # key readable under a held lock was written by the current
-  # incarnation. The pid is written in place, not via dnvr-state — its
+  # incarnation, except when an explicit restart requests state preservation.
+  # Preserving restarts intentionally retain keys, not readiness guarantees.
+  # The pid is written in place, not via dnvr-state — its
   # tmp+mv would detach the locked inode from the path — and opened
   # O_APPEND, truncated only after its lock is won. Nothing ever unlinks
   # pid or launch.lock (the wipe spares them); path lock identity is the
@@ -263,13 +265,24 @@
       echo "[${procName}] another launch is in progress" >&2
       exit 1
     }
-    if ! flock -ns "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null; then
+    # An explicit restart has killed the old process group; wait for its
+    # inherited descriptors to close before claiming the pid lock again.
+    if ! { flock -ns "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null || {
+      [ -n "''${DNVR_PRESERVE_STATE+x}" ] && flock -s -w 10 "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null
+    }; }; then
       echo "[${procName}] pid file is locked — already running?" >&2
       exit 1
     fi
-    ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name launch.lock -exec ${pkgs.coreutils}/bin/rm -rf {} +
+    if [ "''${DNVR_PRESERVE_STATE:-0}" != 1 ]; then
+      ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name launch.lock -exec ${pkgs.coreutils}/bin/rm -rf {} +
+    fi
+    unset DNVR_PRESERVE_STATE
     exec 9>>"$DNVR_RUNTIME_DIR/pid"
-    flock -n 9 || {
+    # dnvr-state get/wait and dnvr ps briefly take shared pid locks when
+    # probing liveness. A reader can arrive after our probe above, so wait
+    # for it instead of reporting a false duplicate launch. launch.lock
+    # still prevents another launcher from claiming the pid concurrently.
+    flock -w 1 9 || {
       echo "[${procName}] pid file is locked — already running?" >&2
       exit 1
     }

@@ -21,7 +21,7 @@ pkgs.writeShellApplication {
                                             <proc> is no longer running
       dnvr-state wait <proc>.<key> [--timeout=N]  block until <proc> is alive and has
                                             published <key> (default 30s)
-      dnvr-state pick-port                  echo a random free TCP port
+      dnvr-state pick-port [key]            allocate a TCP port; reuse/save own state when named
       dnvr-state cache-clear                wipe the ref-handler cache
       dnvr-state dump                       list everything under \$DNVR_STATE/runtime/
 
@@ -70,9 +70,9 @@ pkgs.writeShellApplication {
         # A key is stale if it is readable while its producer is not
         # alive; the producer holds an exclusive flock on its pid file
         # for life, so a free (or absent) lock is the staleness test.
-        # Launches wipe leftover keys BEFORE taking the pid lock
+        # Non-preserving launches wipe leftover keys BEFORE taking the pid lock
         # (serialized by launch.lock), so a key readable under a held
-        # lock always belongs to the live incarnation.
+        # lock belongs to the live incarnation unless state was preserved.
         pidfile="$RUNTIME/$svc/pid"
         if [ ! -f "$pidfile" ] || flock -ns "$pidfile" true 2>/dev/null; then
           echo "dnvr-state: $1 is stale — '$svc' is not running (dump shows raw state)" >&2
@@ -84,9 +84,10 @@ pkgs.writeShellApplication {
       wait)
         # A value is valid only while its producer is alive: the wait is
         # satisfied when the producer holds its pid-file lock and the key
-        # reads successfully. Launches wipe leftover keys before taking
+        # reads successfully. Non-preserving launches wipe keys before taking
         # the lock, so a key readable under a held lock belongs to the
-        # current incarnation. The read is part of the liveness check —
+        # current incarnation; preserving restarts may reuse old keys.
+        # The read is part of the liveness check —
         # a key vanishing between check and read is a retry, not a
         # result. A dead producer's leftover key is stale by definition —
         # keep waiting for the next incarnation, bounded by the timeout.
@@ -148,6 +149,28 @@ pkgs.writeShellApplication {
         ;;
 
       pick-port)
+        [ "$#" -le 1 ] || usage
+        if [ "$#" -eq 1 ]; then
+          : "''${DNVR_RUNTIME_DIR:?named pick-port must run in a process-scoped wrapper}"
+          case "$1" in
+            ""|.*|*/*|pid|launch.lock)
+              echo "dnvr-state pick-port: invalid state key '$1'" >&2
+              exit 2 ;;
+          esac
+          mkdir -p "$DNVR_RUNTIME_DIR"
+          exec 7>>"$DNVR_RUNTIME_DIR/.ports.lock"
+          flock 7
+          if [ -f "$DNVR_RUNTIME_DIR/$1" ]; then
+            cat "$DNVR_RUNTIME_DIR/$1"
+            exit 0
+          fi
+          port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+          tmp=$(mktemp -p "$DNVR_RUNTIME_DIR" ".tmp.$1.XXXXXX")
+          printf '%s\n' "$port" > "$tmp"
+          mv "$tmp" "$DNVR_RUNTIME_DIR/$1"
+          printf '%s\n' "$port"
+          exit 0
+        fi
         # Bind to port 0, ask the kernel which port it gave us, release. The
         # close-to-consumer-bind race window is acceptable for dev use.
         python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()'
