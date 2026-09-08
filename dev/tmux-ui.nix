@@ -8,7 +8,8 @@
 # Stop the session with Q only when changing fixture process commands, whose
 # panes retain their original command while the session is alive.
 let
-  pkgs = (builtins.getFlake "nixpkgs").legacyPackages.${builtins.currentSystem};
+  dnvrFlake = builtins.getFlake (toString ../.);
+  pkgs = dnvrFlake.inputs.nixpkgs.legacyPackages.${builtins.currentSystem};
   framework = import ../. {inherit pkgs;};
   result = framework.mkShells [
     {

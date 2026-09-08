@@ -31,7 +31,46 @@ use ratatui::{
 use signal_hook::consts::signal::SIGUSR1;
 use unicode_width::UnicodeWidthChar;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+mod api;
+
+fn restart_process(pane: &str, wipe_state: bool) -> Result<()> {
+    // Kill the whole pane process group: child servers inherit the wrapper's
+    // pid-file lock, and killing only the pane shell can leave it locked.
+    let dead = tmux_text(&["display-message", "-p", "-t", pane, "#{pane_dead}"])?;
+    if dead.trim() == "0" {
+        let pid: u32 = tmux_text(&["display-message", "-p", "-t", pane, "#{pane_pid}"])?
+            .trim()
+            .parse()?;
+        if pid <= 1 {
+            return Err("invalid pane PID".into());
+        }
+        let output = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "kill pane process group: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+    }
+    tmux(&[
+        "respawn-pane",
+        "-k",
+        "-e",
+        if wipe_state {
+            "DNVR_PRESERVE_STATE=0"
+        } else {
+            "DNVR_PRESERVE_STATE=1"
+        },
+        "-t",
+        pane,
+    ])?;
+    Ok(())
+}
 
 const INPUT_POLL: Duration = Duration::from_millis(100);
 const RESIZE_SETTLE: Duration = Duration::from_millis(16);
@@ -228,7 +267,13 @@ impl App {
             (KeyCode::Enter, _) => self.activate_selected()?,
             (KeyCode::Char('r'), KeyModifiers::NONE) => {
                 if let Some(pane) = self.selected_pane() {
-                    tmux(&["respawn-pane", "-k", "-t", pane])?;
+                    restart_process(pane, false)?;
+                }
+                self.reload()?;
+            }
+            (KeyCode::Char('R'), _) => {
+                if let Some(pane) = self.selected_pane() {
+                    restart_process(pane, true)?;
                 }
                 self.reload()?;
             }
@@ -252,7 +297,7 @@ impl App {
         let mut viewport_height = self.viewport_height;
         terminal.draw(|frame| {
             let [process_area, footer_area] =
-                Layout::vertical([Constraint::Min(0), Constraint::Length(4)]).areas(frame.area());
+                Layout::vertical([Constraint::Min(0), Constraint::Length(5)]).areas(frame.area());
 
             let visible_rows = process_area.height as usize;
             viewport_height = visible_rows;
@@ -300,7 +345,8 @@ impl App {
             let footer_style = Style::default().fg(Color::DarkGray);
             let footer = Paragraph::new(vec![
                 Line::styled(hint, footer_style),
-                Line::styled(" r restart   x interrupt", footer_style),
+                Line::styled(" r restart   R reset+restart", footer_style),
+                Line::styled(" x interrupt", footer_style),
                 Line::styled(" C-a sidebar C-g detach", footer_style),
                 Line::styled(" Q stop all", footer_style),
             ]);
@@ -349,6 +395,7 @@ fn main() -> Result<()> {
     signal_hook::flag::register(SIGUSR1, Arc::clone(&refresh))?;
 
     let mut app = App::new()?;
+    api::start(&app.session_id, Arc::clone(&refresh))?;
     tmux(&[
         "set-option",
         "-p",
