@@ -222,7 +222,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   [`dnvr://` refs](#dnvr-refs).
 - `scripts.<name>` — `{text, runtimeInputs?, shell?, description?}` commands
   on the devshell PATH.
-- `env` — exported in the devshell and to every runner process. `$DNVR_ROOT`
+- `env` — set on devshell entry and inherited by runner processes. `$DNVR_ROOT`
   in values expands at export time (see Static values below). Refs of
   `inShell` schemes (op://) are allowed and resolve at shell entry only;
   `dnvr://` refs belong on the process that consumes them.

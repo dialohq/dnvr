@@ -291,7 +291,7 @@
   upScript = config.runner {
     name = "${name}-up";
     processes = wrappedProcesses;
-    env = allEnv;
+    env = lib.foldl' (a: p: a // plainOf p.env) {} processValues;
     prerun = config.prerun;
   };
 
@@ -753,7 +753,7 @@ in {
       type = types.attrsOf types.anything;
       default = {};
       description = ''
-        Env vars set on the devshell and exported to the runner. Refs of
+        Env vars set on devshell entry and inherited by the runner. Refs of
         schemes with `inShell = true` (e.g. op://) are allowed here: they
         resolve best-effort at shell entry and never reach the runner.
         Schemes with `inShell = false` (dnvr://) are an eval error here —

@@ -173,8 +173,8 @@ in {
     packages = [config.package];
 
     # Set the port env vars statically when httpPort/tcpPort have values.
-    # Shell-level `env` overrides these at eval (it merges over process
-    # env), and `prerun` exports override both at runtime.
+    # Shell-level `env` overrides these only in the devshell; the runner
+    # reapplies process env, then `prerun` exports can override it.
     env =
       (lib.optionalAttrs (config.httpPort != null) {
         "${config.httpPortEnv}" = toString config.httpPort;
