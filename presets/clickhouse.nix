@@ -198,11 +198,11 @@ in {
         # XML reads ports via <… from_env="..."/>, so all we need is to
         # export the right env vars before the exec.
         if [ -z "''${${config.httpPortEnv}:-}" ]; then
-          ${config.httpPortEnv}=$(dnvr-state pick-port)
+          ${config.httpPortEnv}=$(dnvr-state pick-port httpPort)
           export ${config.httpPortEnv}
         fi
         if [ -z "''${${config.tcpPortEnv}:-}" ]; then
-          ${config.tcpPortEnv}=$(dnvr-state pick-port)
+          ${config.tcpPortEnv}=$(dnvr-state pick-port tcpPort)
           export ${config.tcpPortEnv}
         fi
 
