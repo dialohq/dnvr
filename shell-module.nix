@@ -109,13 +109,20 @@
 
   # The dnvr CLI dispatches scripts after its built-in subcommands, so a
   # script by one of these names would exist but never be reachable.
-  reservedCliNames = ["up" "ps" "logs" "state" "completions" "help"];
+  reservedCliNames = ["up" "down" "restart" "ps" "logs" "state" "completions" "help"];
 
   scriptProblems =
     map (n: "scripts.${n} shadows the built-in `dnvr ${n}` subcommand — pick another name")
     (lib.filter (n: lib.elem n reservedCliNames) (lib.attrNames allScripts));
 
-  problems = refProblems ++ scriptProblems;
+  runnerProblems =
+    lib.optional (config.runner != null)
+    "`runner` was replaced by `runners` (registered via dnvr.extraRunners) and `defaultRunner`"
+    ++ lib.optional (config.defaultRunner != null && !(config.runners ? ${config.defaultRunner}))
+    "defaultRunner = \"${config.defaultRunner}\" is not one of the registered runners (${lib.concatStringsSep ", " (lib.attrNames config.runners)})"
+    ++ lib.optional (config.runners == {}) "`runners` is empty — no way to run `dnvr up`";
+
+  problems = refProblems ++ scriptProblems ++ runnerProblems;
 
   checkProblems = x:
     if problems == []
@@ -310,12 +317,46 @@
 
   wrappedProcesses = lib.mapAttrs wrapProcess config.processes;
 
-  upScript = config.runner {
-    name = "${name}-up";
-    processes = wrappedProcesses;
-    env = lib.foldl' (a: p: a // plainOf p.env) {} processValues;
-    prerun = config.prerun;
-  };
+  # Runners predating `settings` keep working: it is passed only to
+  # functions that declare it.
+  runnerPkgs =
+    lib.mapAttrs (
+      runnerName: runner:
+        runner ({
+            name = "${name}-up";
+            processes = wrappedProcesses;
+            env = lib.foldl' (a: p: a // plainOf p.env) {} processValues;
+            prerun = config.prerun;
+          }
+          // lib.optionalAttrs (lib.functionArgs runner ? settings) {
+            settings = config.runner_settings.${runnerName} or {};
+          })
+    )
+    config.runners;
+
+  runnerNames = lib.attrNames config.runners;
+
+  # The runner `dnvr up` uses when nothing selects one: rex inside Rex,
+  # otherwise tmux (or the first registered runner).
+  fallbackRunner =
+    if config.runners ? tmux
+    then "tmux"
+    else lib.head runnerNames;
+
+  staticRunner =
+    if config.defaultRunner != null
+    then config.defaultRunner
+    else fallbackRunner;
+
+  upScript = runnerPkgs.${staticRunner};
+
+  # `<runner>:<verb>` -> executable, for every verb a runner provides.
+  runnerCases = lib.concatStrings (lib.mapAttrsToList (runnerName: pkg:
+    lib.concatStrings (lib.mapAttrsToList (verb: drv: ''
+        ${lib.escapeShellArg "${runnerName}:${verb}"}) printf '%s\n' ${lib.escapeShellArg (lib.getExe drv)} ;;
+      '')
+      ({up = pkg;} // pkg.passthru.commands or {})))
+  runnerPkgs);
 
   inherit (import ./env-export.nix {inherit lib;}) exportLine refersToRoot;
 
@@ -356,7 +397,15 @@
     [
       {
         name = "up";
-        desc = "launch process group (${lib.concatStringsSep ", " (map procLabel (lib.attrNames wrappedProcesses))})";
+        desc = "launch process group (${lib.concatStringsSep ", " (map procLabel (lib.attrNames wrappedProcesses))}); --runner ${lib.concatStringsSep "|" runnerNames}";
+      }
+      {
+        name = "down";
+        desc = "interrupt every process and close the group";
+      }
+      {
+        name = "restart";
+        desc = "interrupt and relaunch one process";
       }
       {
         name = "ps";
@@ -379,12 +428,10 @@
     '')
     knownProcs;
 
-  logCases = lib.concatStrings (lib.imap0 (index: n: let
-    logName = lib.replaceStrings ["/"] ["_"] n;
-  in ''
+  procCases = lib.concatStrings (lib.imap0 (index: n: ''
     ${lib.escapeShellArg n})
-      __dnvr_log="$DNVR_STATE/logs/tmux-${name}-up/${logName}.log"
       __dnvr_index=${toString index}
+      __dnvr_logname=${lib.escapeShellArg (lib.replaceStrings ["/"] ["_"] n)}
       ;;
   '') knownProcs);
 
@@ -519,7 +566,7 @@
   dnvrCli = pkgs.writeShellApplication {
     name = "dnvr";
     runtimeInputs =
-      [upScript dnvrState pkgs.flock pkgs.coreutils pkgs.tmux pkgs.gawk pkgs.ansifilter]
+      [dnvrState pkgs.flock pkgs.coreutils]
       ++ scriptPkgs;
     # The help/list/completions bodies are single-quoted on purpose (printf
     # '%s' with escapeShellArg); SC2016 flags the $ inside them.
@@ -544,6 +591,60 @@
         printf '%-${toString psWidth}s %-8s %s\n' "$1" "$pid" "$status"
       }
 
+      __dnvr_record="''${DNVR_STATE:-}/runtime/runner-${name}"
+
+      __dnvr_need_state() {
+        : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+      }
+
+      # runner, verb -> the runner's executable for it; fails if unsupported.
+      __dnvr_runner_exe() {
+        case "$1:$2" in
+          ${runnerCases}
+          *) return 1 ;;
+        esac
+      }
+
+      # Explicit choice, else defaultRunner, else rex inside Rex, else ${fallbackRunner}.
+      __dnvr_pick_runner() {
+        local runner="$1"
+        ${lib.optionalString (config.defaultRunner != null) ''[ -n "$runner" ] || runner=${lib.escapeShellArg config.defaultRunner}''}
+        if [ -z "$runner" ]; then
+          runner=${lib.escapeShellArg fallbackRunner}
+          ${lib.optionalString (config.runners ? rex) ''
+          if [ -n "''${REX_SESSION:-}" ] && command -v rex >/dev/null 2>&1; then
+            runner=rex
+          fi
+        ''}
+        fi
+        __dnvr_runner_exe "$runner" up >/dev/null || {
+          echo "dnvr: unknown runner '$runner' (${lib.concatStringsSep ", " runnerNames})" >&2
+          return 1
+        }
+        printf '%s\n' "$runner"
+      }
+
+      # The runner that launched the group, else the one `dnvr up` would pick.
+      __dnvr_verb_exe() {
+        local runner=
+        [ -s "$__dnvr_record" ] && read -r runner < "$__dnvr_record"
+        __dnvr_runner_exe "$runner" up >/dev/null || runner=$(__dnvr_pick_runner "") || return 1
+        __dnvr_runner_exe "$runner" "$1" || {
+          echo "dnvr $1: runner '$runner' does not support it" >&2
+          return 1
+        }
+      }
+
+      __dnvr_any_running() {
+        local f
+        for f in ${lib.concatMapStringsSep " " (n: ''"$DNVR_STATE"/runtime/${lib.escapeShellArg n}/pid'') knownProcs}; do
+          if [ -f "$f" ] && ! flock -ns "$f" true 2>/dev/null; then
+            return 0
+          fi
+        done
+        return 1
+      }
+
       cmd="''${1:-}"
       case "$cmd" in
         "" | --help | -h | help)
@@ -554,7 +655,61 @@
           ;;
         up)
           shift
-          exec "${name}-up" "$@"
+          __dnvr_want="''${DNVR_RUNNER:-}"
+          while [ "$#" -gt 0 ]; do
+            case "$1" in
+              --runner)
+                [ "$#" -ge 2 ] || {
+                  echo "dnvr up: --runner needs a name (${lib.concatStringsSep ", " runnerNames})" >&2
+                  exit 64
+                }
+                __dnvr_want="$2"
+                shift 2
+                ;;
+              --runner=*) __dnvr_want="''${1#*=}"; shift ;;
+              *) break ;;
+            esac
+          done
+          __dnvr_need_state
+          __dnvr_runner=$(__dnvr_pick_runner "$__dnvr_want") || exit 64
+          if [ -s "$__dnvr_record" ] && __dnvr_any_running; then
+            read -r __dnvr_previous < "$__dnvr_record" || true
+            if [ "$__dnvr_previous" != "$__dnvr_runner" ]; then
+              if [ -z "$__dnvr_want" ] && __dnvr_runner_exe "$__dnvr_previous" up >/dev/null; then
+                __dnvr_runner="$__dnvr_previous"
+              else
+                echo "dnvr up: the group is running under $__dnvr_previous; run 'dnvr down' first" >&2
+                exit 1
+              fi
+            fi
+          fi
+          mkdir -p "$DNVR_STATE/runtime"
+          printf '%s\n' "$__dnvr_runner" > "$__dnvr_record"
+          exec "$(__dnvr_runner_exe "$__dnvr_runner" up)" "$@"
+          ;;
+        down)
+          __dnvr_need_state
+          __dnvr_exe=$(__dnvr_verb_exe down) || exit 1
+          "$__dnvr_exe"
+          rm -f "$__dnvr_record"
+          ;;
+        restart)
+          shift
+          if [ "$#" -ne 1 ]; then
+            echo "usage: dnvr restart <process>" >&2
+            exit 64
+          fi
+          __dnvr_process="$1"
+          case "$__dnvr_process" in
+            ${procCases}
+            *)
+              echo "dnvr restart: unknown process '$__dnvr_process'" >&2
+              exit 64
+              ;;
+          esac
+          __dnvr_need_state
+          __dnvr_exe=$(__dnvr_verb_exe restart) || exit 1
+          exec "$__dnvr_exe" "$__dnvr_process" "$__dnvr_index"
           ;;
         ps)
           printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS
@@ -608,61 +763,16 @@
               ;;
           esac
           case "$__dnvr_process" in
-            ${logCases}
+            ${procCases}
             *)
               echo "dnvr logs: unknown process '$__dnvr_process'" >&2
               exit 64
               ;;
           esac
-          __dnvr_socket="$DNVR_STATE/runtime/tmux-${name}-up.sock"
-          __dnvr_pane=
-          if [ -S "$__dnvr_socket" ]; then
-            __dnvr_pane=$(tmux -S "$__dnvr_socket" list-panes -s -t =dnvr \
-              -F '#{@dnvr_index}:#{pane_id}' 2>/dev/null \
-              | awk -F : -v wanted="$__dnvr_index" '$1 == wanted { print $2; exit }')
-          fi
-          [ -n "$__dnvr_pane" ] || {
-            echo "dnvr logs: no pane for '$__dnvr_process' (run 'dnvr up' first)" >&2
-            exit 1
-          }
-          if "$__dnvr_follow"; then
-            [ -f "$__dnvr_log" ] || {
-              echo "dnvr logs: no log yet for '$__dnvr_process'" >&2
-              exit 1
-            }
-            __dnvr_tail=(-n "''${__dnvr_lines:-+1}" -F)
-            if "$__dnvr_ansi"; then
-              exec tail "''${__dnvr_tail[@]}" "$__dnvr_log"
-            else
-              tail "''${__dnvr_tail[@]}" "$__dnvr_log" | ansifilter
-            fi
-          else
-            __dnvr_capture=(-p -J -S - -t "$__dnvr_pane")
-            "$__dnvr_ansi" && __dnvr_capture=(-e "''${__dnvr_capture[@]}")
-            if "$__dnvr_ansi"; then
-              if [ -n "$__dnvr_lines" ]; then
-                tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                  | tail -n "$__dnvr_lines"
-              else
-                exec tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}"
-              fi
-            else
-              # capture-pane includes unused screen rows and tmux's synthetic
-              # "Pane is dead" footer. Keep real internal blank lines while
-              # trimming that display-only tail from agent-facing output.
-              tmux -S "$__dnvr_socket" capture-pane "''${__dnvr_capture[@]}" \
-                | awk '
-                    /^Pane is dead \(status [0-9]+,/ { next }
-                    { line[NR] = $0; if ($0 !~ /^[[:space:]]*$/) last = NR }
-                    END { for (i = 1; i <= last; i++) print line[i] }
-                  ' \
-                | if [ -n "$__dnvr_lines" ]; then
-                    tail -n "$__dnvr_lines"
-                  else
-                    cat
-                  fi
-            fi
-          fi
+          __dnvr_need_state
+          __dnvr_exe=$(__dnvr_verb_exe logs) || exit 1
+          exec "$__dnvr_exe" "$__dnvr_process" "$__dnvr_index" "$__dnvr_logname" \
+            "$__dnvr_follow" "$__dnvr_ansi" "$__dnvr_lines"
           ;;
         ''
       }
@@ -860,10 +970,42 @@ in {
       default = "";
     };
 
+    runners = mkOption {
+      type = types.attrsOf (types.functionTo types.package);
+      default = runners;
+      defaultText = "every registered runner (built-in tmux and rex, plus dnvr.extraRunners)";
+      description = ''
+        Runners `dnvr up` can launch the group with, by name. Each is a
+        function `{name, processes, env, prerun, settings?}: drv` producing
+        the up-script; `passthru.commands.{logs,down,restart}` provide the
+        matching `dnvr` subcommands.
+      '';
+    };
+
+    defaultRunner = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Runner `dnvr up` uses when neither `--runner` nor `$DNVR_RUNNER`
+        picks one. null chooses at runtime: `rex` inside a Rex terminal,
+        `tmux` otherwise.
+      '';
+    };
+
+    runner_settings = mkOption {
+      type = types.attrsOf (types.attrsOf types.anything);
+      default = {};
+      description = ''
+        Shell-wide runner config, keyed by runner name and passed to that
+        runner as `settings` (e.g. `runner_settings.rex.layout = "panes"`).
+      '';
+    };
+
     runner = mkOption {
-      type = types.functionTo types.package;
-      default = runners.tmux;
-      description = "Function `{name, processes, env, prerun}: drv` that produces the up-script.";
+      type = types.raw;
+      default = null;
+      visible = false;
+      description = "Removed: register runners through `dnvr.extraRunners` and pick one with `defaultRunner`.";
     };
 
     shell = mkOption {

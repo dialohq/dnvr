@@ -11,6 +11,7 @@
 
   builtinRunners = {
     tmux = import ./runners/tmux.nix {inherit pkgs lib;};
+    rex = import ./runners/rex.nix {inherit pkgs lib;};
   };
 
   runners = builtinRunners // extraRunners;
