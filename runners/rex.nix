@@ -66,20 +66,17 @@
   logName = p: lib.replaceStrings ["/"] ["_"] p;
 
   # Rex starts blocks from its server's environment, so the launcher adopts
-  # the up-script's exported snapshot first. `script` keeps the process on a
-  # pty while appending its raw output to the log that `dnvr logs -f` tails.
+  # the up-script's exported snapshot first. On restart it is also handed the
+  # block it replaces and waits for Rex to end that block's process.
   launcher = p: let
     run = pkgs.writeShellScript "dnvr-${shellName}-${logName p}-run" (runnerLib.resolveCommand p processes.${p});
-    record =
-      if pkgs.stdenv.hostPlatform.isDarwin
-      then ''exec /usr/bin/script -q -a -F "$__log" ${run}''
-      else ''exec ${pkgs.util-linux}/bin/script -q -a -f -e -c ${run} "$__log"'';
   in
     pkgs.writeShellScript "dnvr-${shellName}-${logName p}-launch" ''
       source "$1"
-      __log="$DNVR_STATE/logs/rex-${name}/${logName p}.log"
-      mkdir -p "''${__log%/*}"
-      ${record}
+      if [ -n "''${2:-}" ]; then
+        rex wait "$2" >/dev/null 2>&1 || true
+      fi
+      exec ${run}
     '';
 
   leaf = p: {
@@ -125,7 +122,7 @@
 
   leavesJson = pkgs.writeText "dnvr-${shellName}-rex-leaves.json" (builtins.toJSON (lib.genAttrs processNames leaf));
 
-  runtimeInputs = [pkgs.jq pkgs.coreutils pkgs.gnugrep pkgs.ansifilter];
+  runtimeInputs = [pkgs.jq pkgs.coreutils pkgs.gnugrep pkgs.gnused];
 
   substitute = ''walk(if . == "@ENV@" then $env elif . == "@CWD@" then $cwd else . end)'';
 
@@ -138,7 +135,6 @@
     __rex_state="$DNVR_STATE/runtime/rex-${name}.json"
     __rex_env="$DNVR_STATE/runtime/rex-${name}.env"
     __procs=(${lib.escapeShellArgs processNames})
-    ${runnerLib.procHelpers}
 
     # Block IDs currently in session $1; fails when the session is gone.
     __rex_blocks() {
@@ -161,15 +157,24 @@
         '.[$p] | ${substitute}' ${leavesJson}
     }
 
+    # The block <proc> runs in, if it is still in the group's session.
+    __rex_block_of() {
+      local block
+      block=$(__rex_get ".blocks[\"$1\"]")
+      [ -n "$block" ] && __rex_blocks "$(__rex_get .session_id)" | grep -qxF "$block" \
+        && printf '%s\n' "$block"
+    }
+
     # Start <proc> afresh: beside its old block, which is then closed so the
     # new block takes its place, or in a new tab when the old one is gone.
+    # Closing a block ends its process; the new launcher waits for that.
     __rex_respawn() {
       local proc="$1" sid old new created
       sid=$(__rex_get .session_id)
-      old=$(__rex_get ".blocks[\"$proc\"]")
-      if [ -n "$old" ] && __rex_blocks "$sid" | grep -qxF "$old"; then
+      if old=$(__rex_block_of "$proc"); then
         new=$(jq -nc --arg s "$sid" --arg a "$old" --argjson l "$(__rex_leaf "$proc")" \
-          '{session_id: $s, anchor_id: $a, direction: "horizontal", side: "after", layout: $l}' \
+          '{session_id: $s, anchor_id: $a, direction: "horizontal", side: "after",
+            layout: ($l | .block.options.command += [$a])}' \
           | rex api call session.new_split - | jq -r '.block_ids[0]')
         rex block close -s "$sid" "$old" >/dev/null
       else
@@ -229,76 +234,63 @@
   # Args: <process> <index> <logName> <follow> <ansi> <lines>
   logs = mkVerb "logs" ''
     __process="$1"
-    __log="$DNVR_STATE/logs/rex-${name}/$3.log"
     __follow="$4"
-    __ansi="$5"
     __lines="$6"
-    __tail() {
-      if [ -n "$__lines" ]; then
-        tail -n "$__lines"
-      else
-        cat
-      fi
-    }
-    if "$__follow"; then
-      [ -f "$__log" ] || {
-        echo "dnvr logs: no log yet for '$__process'" >&2
-        exit 1
-      }
-      __args=(-n "''${__lines:-+1}" -F)
-      if "$__ansi"; then
-        exec tail "''${__args[@]}" "$__log"
-      else
-        tail "''${__args[@]}" "$__log" | ansifilter
-      fi
-      exit
+    __format=(--trim --unwrap)
+    if "$5"; then
+      __format=(--trim --format=vt)
     fi
-    __block=
-    if [ -f "$__rex_state" ]; then
-      __sid=$(__rex_get .session_id)
-      __block=$(__rex_get ".blocks[\"$__process\"]")
-      if [ -n "$__block" ] && ! { __rex_blocks "$__sid" || true; } | grep -qxF "$__block"; then
-        __block=
-      fi
-    fi
-    if [ -n "$__block" ]; then
-      if "$__ansi"; then
-        rex capture -s "$__sid" -b "$__block" --trim --format=vt | __tail
-      else
-        rex capture -s "$__sid" -b "$__block" --trim --unwrap | __tail
-      fi
-    elif [ -f "$__log" ]; then
-      if "$__ansi"; then
-        tr -d '\r' < "$__log" | __tail
-      else
-        ansifilter < "$__log" | tr -d '\r' | __tail
-      fi
-    else
-      echo "dnvr logs: no block or log for '$__process' (run 'dnvr up' first)" >&2
+    if [ ! -f "$__rex_state" ] || ! __block=$(__rex_block_of "$__process"); then
+      echo "dnvr logs: no pane for '$__process' (run 'dnvr up' first)" >&2
       exit 1
     fi
+    __sid=$(__rex_get .session_id)
+    if ! "$__follow"; then
+      rex capture -s "$__sid" -b "$__block" "''${__format[@]}" \
+        | if [ -n "$__lines" ]; then tail -n "$__lines"; else cat; fi
+      exit
+    fi
+    # Rex streams no terminal output to the CLI, so follow polls captures. The
+    # last line may still be growing; it is printed once a line follows it or
+    # the process has exited. A restarted process is followed into its new
+    # block; the follow ends with the group.
+    __done=0
+    __first=true
+    while :; do
+      if ! __out=$(rex capture -s "$__sid" -b "$__block" "''${__format[@]}" 2>/dev/null); then
+        __block=$(__rex_block_of "$__process") || exit 0
+        __done=0
+        continue
+      fi
+      __total=$(printf '%s\n' "$__out" | wc -l)
+      __ready=$((__total - 1))
+      if [ "$__ready" -le "$__done" ] \
+        && rex block call -s "$__sid" -b "$__block" process 2>/dev/null | jq -e '.child == null' >/dev/null; then
+        __ready=$__total
+      fi
+      if "$__first"; then
+        __first=false
+        if [ -n "$__lines" ] && [ "$__ready" -gt "$__lines" ]; then
+          __done=$((__ready - __lines))
+        fi
+      fi
+      [ "$__done" -le "$__ready" ] || __done=$__ready
+      if [ "$__ready" -gt "$__done" ]; then
+        printf '%s\n' "$__out" | sed -n "$((__done + 1)),$((__ready))p"
+        __done=$__ready
+      fi
+      sleep 0.5
+    done
   '';
 
-  # Interrupt first: closing a block only SIGHUPs its process, which some
-  # servers (postgres) treat as a config reload rather than a stop.
+  # Rex ends the processes of the blocks it closes.
   down = mkVerb "down" ''
     [ -f "$__rex_state" ] || {
       echo "dnvr down: no Rex group is running" >&2
       exit 1
     }
     __sid=$(__rex_get .session_id)
-    __live=$(__rex_blocks "$__sid" || true)
-    for __proc in "''${__procs[@]}"; do
-      __block=$(__rex_get ".blocks[\"$__proc\"]")
-      if [ -n "$__block" ] && grep -qxF "$__block" <<<"$__live" && __dnvr_running "$__proc"; then
-        rex send-key -s "$__sid" -b "$__block" ctrl+c
-      fi
-    done
-    for __proc in "''${__procs[@]}"; do
-      __dnvr_wait_stopped "$__proc" 10 \
-        || echo "dnvr down: $__proc still running after 10s; closing its terminal" >&2
-    done
-    if [ -n "$__live" ]; then
+    if __rex_blocks "$__sid" >/dev/null; then
       if [ "$(__rex_get .placement)" = new-session ]; then
         rex kill "$__sid" >/dev/null
       else
@@ -312,25 +304,16 @@
 
   # Args: <process> <index>
   restart = mkVerb "restart" ''
-    __proc="$1"
-    if [ ! -f "$__rex_state" ] || ! __live=$(__rex_blocks "$(__rex_get .session_id)"); then
+    if [ ! -f "$__rex_state" ] || ! __rex_blocks "$(__rex_get .session_id)" >/dev/null; then
       echo "dnvr restart: no Rex group is running (run 'dnvr up' first)" >&2
       exit 1
     fi
-    if __dnvr_running "$__proc"; then
-      __block=$(__rex_get ".blocks[\"$__proc\"]")
-      if [ -n "$__block" ] && grep -qxF "$__block" <<<"$__live"; then
-        rex send-key -s "$(__rex_get .session_id)" -b "$__block" ctrl+c
-      fi
-      __dnvr_wait_stopped "$__proc" 10 \
-        || echo "dnvr restart: $__proc still running after 10s; closing its terminal" >&2
-    fi
-    __rex_respawn "$__proc"
+    __rex_respawn "$1"
   '';
 in
   runnerLib.mkUpScript {
     inherit name env prerun;
-    runtimeInputs = runtimeInputs ++ [pkgs.flock];
+    inherit runtimeInputs;
     passthru.commands = {inherit logs down restart;};
 
     # A live group is focused, with any process block the user closed
