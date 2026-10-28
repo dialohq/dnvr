@@ -104,11 +104,11 @@ set and `rex` on PATH) and `tmux` otherwise. The choice is recorded under
 that launched the group, and a plain `dnvr up` returns to it. Asking for a
 different runner while the group is running is refused until `dnvr down`.
 
-`dnvr down` sends Ctrl-C to every running process and waits up to 10 s for
-each to release its pid lock before closing the group. Closing a terminal
-alone only sends SIGHUP, which some servers (postgres) treat as a reload.
-`dnvr restart <process>` does the same for one process and starts it again
-in place.
+`dnvr down` closes the group and `dnvr restart <process>` relaunches one
+process in place. How processes are stopped is up to the runner: tmux sends
+Ctrl-C and waits up to 10 s for the process to release its pid lock, since
+closing a tmux pane alone only sends SIGHUP (a config reload for postgres).
+Rex ends the processes of the panes it closes itself.
 
 ### Rex tabs and panes
 
@@ -147,9 +147,14 @@ Requirements and notes:
 - Switching the app to the session needs Remote Control enabled in Rex.app
   (Settings → Rex Server). Without it, `dnvr up` prints the session name to
   open by hand.
-- Each process runs under `script(1)`, which writes its raw output to
-  `.dnvr/logs/rex-<shell>-up/<process>.log` for `dnvr logs -f`. Snapshots
-  come from `rex capture`.
+- Rex manages the processes: `dnvr down` kills the session (or closes
+  dnvr's tabs), and `dnvr restart` opens the new pane beside the old one,
+  which waits (`rex wait`) until Rex has closed the old pane and ended its
+  process.
+- `dnvr logs` reads the pane with `rex capture`. Rex streams no terminal
+  output to the CLI, so `-f` polls it twice a second and follows a restarted
+  process into its new pane. The panes are the only log; there are no log
+  files under `.dnvr/logs`.
 
 ### Persistent tmux dashboard
 
