@@ -219,8 +219,10 @@
   #     lock, never from the pid number, so a recycled pid can't
   #     masquerade as running.
   #
-  # Under launch.lock: a held pid lock means a live instance — fail fast
-  # without touching its state. A free pid lock proves any keys on disk
+  # Under launch.lock: a pid lock held by the recorded pid means a live
+  # instance — fail fast without touching its state. One held only by other
+  # processes means a dead instance's children inherited it; they are
+  # stopped first. A free pid lock proves any keys on disk
   # are a dead incarnation's, so the wipe is safe; and because the wipe
   # runs BEFORE the pid lock is taken, readers — which trust a key only
   # under a held pid lock — can never observe a stale key as live: every
@@ -239,12 +241,32 @@
       exit 1
     }
     if ! flock -ns "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null; then
-      echo "[${procName}] pid file is locked — already running?" >&2
-      exit 1
+      # Children inherit fd 9 (write mode; liveness probes only read), so a
+      # killed launcher can leave them holding the lock. Without the recorded
+      # pid among the holders, they are leftovers: stop them and carry on.
+      __dnvr_owner=
+      read -r __dnvr_owner < "$DNVR_RUNTIME_DIR/pid" || true
+      __dnvr_holders=$(${pkgs.lsof}/bin/lsof -F pa "$DNVR_RUNTIME_DIR/pid" 2>/dev/null \
+        | ${pkgs.gawk}/bin/awk '/^p/ { p = substr($0, 2) } /^a[wu]/ { print p }' || true)
+      if [ -z "$__dnvr_holders" ] || printf '%s\n' "$__dnvr_holders" | ${pkgs.gnugrep}/bin/grep -qxF "$__dnvr_owner"; then
+        echo "[${procName}] already running (pid $__dnvr_owner)" >&2
+        exit 1
+      fi
+      __dnvr_list=$(printf '%s' "$__dnvr_holders" | ${pkgs.coreutils}/bin/tr '\n' ' ')
+      echo "[${procName}] stopping processes left by a dead launch: $__dnvr_list" >&2
+      printf '%s\n' "$__dnvr_holders" | ${pkgs.findutils}/bin/xargs kill -TERM 2>/dev/null || true
+      if ! flock -s -w 10 "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null; then
+        printf '%s\n' "$__dnvr_holders" | ${pkgs.findutils}/bin/xargs kill -KILL 2>/dev/null || true
+        flock -s -w 5 "$DNVR_RUNTIME_DIR/pid" true 2>/dev/null || {
+          echo "[${procName}] pid file is still locked by: $__dnvr_list" >&2
+          exit 1
+        }
+      fi
     fi
     ${pkgs.findutils}/bin/find "$DNVR_RUNTIME_DIR" -mindepth 1 -maxdepth 1 ! -name pid ! -name launch.lock -exec ${pkgs.coreutils}/bin/rm -rf {} +
     exec 9>>"$DNVR_RUNTIME_DIR/pid"
-    flock -n 9 || {
+    # Liveness probes (`dnvr-state wait` polls them) briefly share the lock.
+    flock -w 5 9 || {
       echo "[${procName}] pid file is locked — already running?" >&2
       exit 1
     }
