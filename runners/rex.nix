@@ -122,7 +122,7 @@
 
   leavesJson = pkgs.writeText "dnvr-${shellName}-rex-leaves.json" (builtins.toJSON (lib.genAttrs processNames leaf));
 
-  runtimeInputs = [pkgs.jq pkgs.coreutils pkgs.gnugrep pkgs.gnused];
+  runtimeInputs = [pkgs.jq pkgs.coreutils pkgs.gnugrep pkgs.gnused pkgs.git];
 
   substitute = ''walk(if . == "@ENV@" then $env elif . == "@CWD@" then $cwd else . end)'';
 
@@ -364,7 +364,20 @@ in
         export -p > "$__rex_env"
       )
 
-      __label="$(basename "''${DNVR_ROOT:-''${DNVR_STATE%/*}}")/${shellName}"
+      # <repo>@<branch>:<shell>. Worktree folders often share a name; a branch
+      # is checked out in at most one worktree of a repo.
+      __root="''${DNVR_ROOT:-''${DNVR_STATE%/*}}"
+      __label="$(basename "$__root"):${shellName}"
+      if __common=$(git -C "$__root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        __repo=$(git -C "$__root" remote get-url origin 2>/dev/null || true)
+        __repo=$(basename "''${__repo%/}" .git)
+        if [ -z "$__repo" ]; then
+          __repo=$(basename "$__common" .git)
+          case "$__repo" in "" | .git | .bare) __repo=$(basename "$(dirname "$__common")") ;; esac
+        fi
+        __branch=$(git -C "$__root" symbolic-ref --short -q HEAD || basename "$__root")
+        __label="$__repo@$__branch:${shellName}"
+      fi
       __windows=$(jq -c --arg env "$__rex_env" --arg cwd "$PWD" '${substitute}' ${windowsJson})
       ${
         if cfg.placement == "new-session"
