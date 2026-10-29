@@ -113,10 +113,15 @@ Rex ends the processes of the panes it closes itself.
 ### Rex tabs and panes
 
 Under the `rex` runner, `dnvr up` creates a Rex session named
-`<repo>/<shell>` with one tab per process, switches the Rex app to it, and
-returns. Running it again focuses the existing session and restarts any
-process whose pane was closed. Each process runs directly in its pane, which
-stays open after the process exits so its output can be read.
+`<repo>@<branch>:<shell>` (e.g. `api@main:backend`) with one tab per process,
+switches the Rex app to it, and returns. `<repo>` is the `origin` remote's
+repository name, or the main checkout's folder without a remote, so every
+worktree of a repo shares it and only the branch tells them apart. A
+detached HEAD shows the worktree folder instead of the branch, and outside
+git the name is `<folder>:<shell>`. The name is only a label: dnvr finds the
+session again by its ID. Running `dnvr up` again focuses the existing session
+and restarts any process whose pane was closed. Each process runs directly in
+its pane, which stays open after the process exits so its output can be read.
 
 Configure the layout per shell, and group processes into shared tabs per
 process:
