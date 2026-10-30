@@ -6,6 +6,7 @@
   processes,
   env ? {},
   prerun ? "",
+  settings ? {},
 }: let
   runnerLib = import ./lib.nix {inherit pkgs lib;};
   processNames = lib.attrNames processes;
@@ -114,10 +115,119 @@
     tmux -S "$__socket" set-hook -g client-resized \
       "resize-window -A -t '=$__session:dashboard' ; resize-pane -t '$__sidebar' -x 30"
   '';
+  verbPrelude = ''
+    : "''${DNVR_STATE:?DNVR_STATE must be set (run via nix develop)}"
+    __socket="$DNVR_STATE/runtime/tmux-${name}.sock"
+    __procs=(${lib.escapeShellArgs processNames})
+    ${runnerLib.procHelpers}
+    __dnvr_pane() {
+      [ -S "$__socket" ] || return 0
+      tmux -S "$__socket" list-panes -s -t =dnvr \
+        -F '#{@dnvr_index}:#{pane_id}' 2>/dev/null \
+        | awk -F : -v wanted="$1" '$1 == wanted { print $2; exit }'
+    }
+  '';
+
+  mkVerb = verb: text:
+    pkgs.writeShellApplication {
+      name = "${name}-tmux-${verb}";
+      runtimeInputs = [pkgs.tmux pkgs.coreutils pkgs.gawk pkgs.ansifilter];
+      text = verbPrelude + text;
+    };
+
+  # Args: <process> <index> <logName> <follow> <ansi> <lines>
+  logs = mkVerb "logs" ''
+    __process="$1"
+    __pane=$(__dnvr_pane "$2")
+    __log="$DNVR_STATE/logs/tmux-${name}/$3.log"
+    __follow="$4"
+    __ansi="$5"
+    __lines="$6"
+    [ -n "$__pane" ] || {
+      echo "dnvr logs: no pane for '$__process' (run 'dnvr up' first)" >&2
+      exit 1
+    }
+    if "$__follow"; then
+      [ -f "$__log" ] || {
+        echo "dnvr logs: no log yet for '$__process'" >&2
+        exit 1
+      }
+      __tail=(-n "''${__lines:-+1}" -F)
+      if "$__ansi"; then
+        exec tail "''${__tail[@]}" "$__log"
+      else
+        tail "''${__tail[@]}" "$__log" | ansifilter
+      fi
+    else
+      __capture=(-p -J -S - -t "$__pane")
+      "$__ansi" && __capture=(-e "''${__capture[@]}")
+      if "$__ansi"; then
+        if [ -n "$__lines" ]; then
+          tmux -S "$__socket" capture-pane "''${__capture[@]}" | tail -n "$__lines"
+        else
+          exec tmux -S "$__socket" capture-pane "''${__capture[@]}"
+        fi
+      else
+        # capture-pane includes unused screen rows and tmux's synthetic
+        # "Pane is dead" footer. Keep real internal blank lines while
+        # trimming that display-only tail from agent-facing output.
+        tmux -S "$__socket" capture-pane "''${__capture[@]}" \
+          | awk '
+              /^Pane is dead \(status [0-9]+,/ { next }
+              { line[NR] = $0; if ($0 !~ /^[[:space:]]*$/) last = NR }
+              END { for (i = 1; i <= last; i++) print line[i] }
+            ' \
+          | if [ -n "$__lines" ]; then
+              tail -n "$__lines"
+            else
+              cat
+            fi
+      fi
+    fi
+  '';
+
+  # Interrupt first: closing a pane only SIGHUPs its process, which some
+  # servers (postgres) treat as a config reload rather than a stop.
+  down = mkVerb "down" ''
+    if ! tmux -S "$__socket" has-session -t =dnvr 2>/dev/null; then
+      echo "dnvr down: no tmux group is running" >&2
+      exit 1
+    fi
+    for __i in "''${!__procs[@]}"; do
+      __pane=$(__dnvr_pane "$__i")
+      if [ -n "$__pane" ] && __dnvr_running "''${__procs[$__i]}"; then
+        tmux -S "$__socket" send-keys -t "$__pane" C-c
+      fi
+    done
+    for __proc in "''${__procs[@]}"; do
+      __dnvr_wait_stopped "$__proc" 10 \
+        || echo "dnvr down: $__proc still running after 10s; closing its pane" >&2
+    done
+    tmux -S "$__socket" kill-session -t =dnvr
+  '';
+
+  # Args: <process> <index>
+  restart = mkVerb "restart" ''
+    __pane=$(__dnvr_pane "$2")
+    [ -n "$__pane" ] || {
+      echo "dnvr restart: no pane for '$1' (run 'dnvr up' first)" >&2
+      exit 1
+    }
+    if __dnvr_running "$1"; then
+      tmux -S "$__socket" send-keys -t "$__pane" C-c
+      __dnvr_wait_stopped "$1" 10 \
+        || echo "dnvr restart: $1 still running after 10s; killing its pane" >&2
+    fi
+    tmux -S "$__socket" respawn-pane -k -t "$__pane"
+    __sidebar_pid=$(tmux -S "$__socket" list-panes -s -t =dnvr \
+      -f '#{==:#{@dnvr_role},sidebar}' -F '#{@dnvr_sidebar_pid}')
+    [ -z "$__sidebar_pid" ] || kill -USR1 "$__sidebar_pid" 2>/dev/null || true
+  '';
 in
   runnerLib.mkUpScript {
     inherit name env prerun;
     runtimeInputs = [pkgs.tmux];
+    passthru.commands = {inherit logs down restart;};
 
     # The socket is scoped by DNVR_STATE, so a fixed session name is enough and
     # avoids tmux's punctuation restrictions on session names.

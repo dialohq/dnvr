@@ -11,6 +11,20 @@ in {
     then "${p.command}/bin/${p.command.meta.mainProgram or p.command.pname or procName}"
     else p.command;
 
+  # Bash helpers over the pid-lock liveness contract, for runner verbs.
+  # They read `$DNVR_STATE/runtime/<proc>/pid` and never create it.
+  procHelpers = ''
+    __dnvr_running() {
+      local f="$DNVR_STATE/runtime/$1/pid"
+      [ -f "$f" ] && ! ${pkgs.flock}/bin/flock -ns "$f" true 2>/dev/null
+    }
+    __dnvr_wait_stopped() {
+      local f="$DNVR_STATE/runtime/$1/pid"
+      [ -f "$f" ] || return 0
+      ${pkgs.flock}/bin/flock -s -w "$2" "$f" true 2>/dev/null
+    }
+  '';
+
   # Shared up-script scaffolding: DNVR_STATE guard, env exports (plus a
   # DNVR_ROOT guard when any value expands it), optional reattachment before
   # prerun, then exec the process manager. Process liveness is still the flock
@@ -23,6 +37,7 @@ in {
     runtimeInputs,
     reattach ? "",
     exec,
+    passthru ? {},
   }: let
     rootGuard =
       lib.optionalString (lib.any refersToRoot (lib.attrValues env))
@@ -33,7 +48,7 @@ in {
       (lib.mapAttrsToList exportLine env);
   in
     pkgs.writeShellApplication {
-      inherit name runtimeInputs;
+      inherit name runtimeInputs passthru;
       # Env exports single-quote user values, which may legitimately contain
       # `$` (passwords, templates); SC2016 would flag every one of them.
       excludeShellChecks = ["SC2016"];

@@ -13,7 +13,8 @@ Shell state is confined to `.dnvr/*` under the repo root (nothing in
 Processes discover each other's runtime values (ports, socket dirs)
 through the bundled `dnvr-state` CLI — or declaratively via `dnvr://`
 env refs, which double as the process dependency graph — and run in a
-persistent, sidebar-first tmux dashboard.
+persistent, sidebar-first tmux dashboard, or as tabs and panes of the
+[Rex](https://www.superlogical.com/rex) terminal when you are in one.
 
 ## Usage (flake-parts)
 
@@ -84,14 +85,83 @@ Every devshell carries a `dnvr` command scoped to its shell:
 
 ```console
 $ dnvr --help     # everything in this shell: commands, descriptions
-$ dnvr up         # launch the process group
+$ dnvr up         # launch the process group (--runner tmux|rex)
+$ dnvr down       # interrupt every process and close the group
+$ dnvr restart api # interrupt and relaunch one process
 $ dnvr ps         # process status: pid + liveness per process
 $ dnvr logs api   # plain-text snapshot of api's retained scrollback
 $ dnvr migrate    # run a script (scripts are also on PATH directly)
 $ dnvr state dump # dnvr-state passthrough
 ```
 
-### Persistent process dashboard
+### Runners
+
+`dnvr up` launches the group with one of the shell's `runners`, chosen at
+run time: `--runner <name>`, else `$DNVR_RUNNER`, else the shell's
+`defaultRunner`, else `rex` when run inside a Rex terminal (`$REX_SESSION`
+set and `rex` on PATH) and `tmux` otherwise. The choice is recorded under
+`.dnvr/runtime`, so `dnvr logs`, `down`, and `restart` talk to the runner
+that launched the group, and a plain `dnvr up` returns to it. Asking for a
+different runner while the group is running is refused until `dnvr down`.
+
+`dnvr down` closes the group and `dnvr restart <process>` relaunches one
+process in place. How processes are stopped is up to the runner: tmux sends
+Ctrl-C and waits up to 10 s for the process to release its pid lock, since
+closing a tmux pane alone only sends SIGHUP (a config reload for postgres).
+Rex ends the processes of the panes it closes itself.
+
+### Rex tabs and panes
+
+Under the `rex` runner, `dnvr up` creates a Rex session named
+`<repo>@<branch>:<shell>` (e.g. `api@main:backend`) with one tab per process,
+switches the Rex app to it, and returns. `<repo>` is the `origin` remote's
+repository name, or the main checkout's folder without a remote, so every
+worktree of a repo shares it and only the branch tells them apart. A
+detached HEAD shows the worktree folder instead of the branch, and outside
+git the name is `<folder>:<shell>`. The name is only a label: dnvr finds the
+session again by its ID. Running `dnvr up` again focuses the existing session
+and restarts any process whose pane was closed. Each process runs directly in
+its pane, which stays open after the process exits so its output can be read.
+
+Configure the layout per shell, and group processes into shared tabs per
+process:
+
+```nix
+dnvr.shells.backend = {
+  runner_settings.rex = {
+    layout = "tabs";            # "tabs" (one per process) | "panes" (all in one tab)
+    arrangement = "tiled";      # how a tab's panes split: "tiled" | "columns" | "rows"
+    placement = "new-session";  # or "current-session": add the tabs to the Rex session you ran `dnvr up` from
+    focus = true;               # switch the Rex app to the group after `dnvr up`
+  };
+
+  # pg and redis share a "data" tab as split panes; api keeps its own tab.
+  processes.pg.runner_settings.rex.tab = "data";
+  processes.redis.runner_settings.rex.tab = "data";
+};
+```
+
+Requirements and notes:
+
+- The `rex` CLI must be on PATH (it ships with the Rex app); it is not taken
+  from nixpkgs.
+- Rex starts panes from its server's environment, so `dnvr up` saves its
+  exported environment (devshell env plus `prerun` exports) to
+  `.dnvr/runtime/rex-<shell>-up.env` (mode 600; it may contain secrets) for
+  each pane to load. `dnvr down` deletes it.
+- Switching the app to the session needs Remote Control enabled in Rex.app
+  (Settings → Rex Server). Without it, `dnvr up` prints the session name to
+  open by hand.
+- Rex manages the processes: `dnvr down` kills the session (or closes
+  dnvr's tabs), and `dnvr restart` opens the new pane beside the old one,
+  which waits (`rex wait`) until Rex has closed the old pane and ended its
+  process.
+- `dnvr logs` reads the pane with `rex capture`. Rex streams no terminal
+  output to the CLI, so `-f` polls it twice a second and follows a restarted
+  process into its new pane. The panes are the only log; there are no log
+  files under `.dnvr/logs`.
+
+### Persistent tmux dashboard
 
 Every process command runs directly in its own tmux pane. The dashboard keeps
 a fixed process-list pane on the left
@@ -113,10 +183,11 @@ place without restarting the process panes.
 - Raw process output is also appended under `.dnvr/logs/tmux-<shell>-up/`.
 
 From the dnvr repository, the development fixture exposes the same CLI through
-`nix run`. Start its dashboard in one terminal, then query it from another:
+`nix run`. Start its group in one terminal, then query it from another:
 
 ```console
 $ nix run --impure --expr 'import ./dev/tmux-ui.nix'
+$ nix run --impure --expr 'import ./dev/tmux-ui.nix' '' -- up --runner rex
 $ nix run --impure --expr 'import ./dev/tmux-ui.nix' '' -- logs stream
 ```
 
@@ -200,7 +271,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
 | arg | what it is |
 |---|---|
 | `presets` | Built-in process presets (`postgres`, `clickhouse`) plus `dnvr.presets`. |
-| `runners` | The tmux up-script builder plus `dnvr.extraRunners`. |
+| `runners` | The built-in runners (`tmux`, `rex`) plus `dnvr.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
 
@@ -230,8 +301,12 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
   `dnvr://` refs.
 - `prerun` — shell code run inside the up-script before the runner execs
   (dynamic port picking etc.; anything `export`ed flows to all processes).
-- `runner` — defaults to the persistent, reattachable `runners.tmux` sidebar
-  viewer. It may be replaced by a custom `dnvr.extraRunners` entry.
+- `runners` — runners `dnvr up` can choose from, by name. Defaults to every
+  registered runner (`tmux`, `rex`, and `dnvr.extraRunners`).
+- `defaultRunner` — runner used when neither `--runner` nor `$DNVR_RUNNER`
+  picks one. `null` (default) means `rex` inside Rex, `tmux` otherwise.
+- `runner_settings.<runner>` — shell-wide runner config passed to that runner
+  (see [Rex tabs and panes](#rex-tabs-and-panes)).
 - `cli` — read-only shell-scoped `dnvr` CLI package.
 - `shellHook` — escape hatch.
 
@@ -393,8 +468,13 @@ plain value once a handler for it exists.
 
 - `dnvr.presets.<name>` — custom process presets (deferred modules) merged
   over the built-ins; import them in any shell via `processes.<proc>.imports`.
-- `dnvr.extraRunners` — extend the runner registry. A custom runner reads its
-  per-process config from `runner_settings.<its-name>` by convention.
+- `dnvr.extraRunners` — extend the runner registry. A runner is a function
+  `{name, processes, env, prerun, settings?}: drv` returning the up-script.
+  `settings` is the shell's `runner_settings.<its-name>`. It reads per-process
+  config from `processes.<p>.runner_settings.<its-name>` by convention.
+  Optional `passthru.commands.{logs,down,restart}` executables back the
+  matching `dnvr` subcommands. `logs` receives `<process> <index> <logName>
+  <follow> <ansi> <lines>` and `restart` receives `<process> <index>`.
 - `dnvr.specialArgs` — extra module args (e.g. `{inherit inputs;}`)
   injected into every `dnvr.shells.<name>` submodule and their
   process/script submodules.
