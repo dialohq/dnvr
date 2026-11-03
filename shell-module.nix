@@ -637,7 +637,7 @@
 
       __dnvr_any_running() {
         local f
-        for f in ${lib.concatMapStringsSep " " (n: ''"$DNVR_STATE"/runtime/${lib.escapeShellArg n}/pid'') knownProcs}; do
+        for f in "$@"; do
           if [ -f "$f" ] && ! flock -ns "$f" true 2>/dev/null; then
             return 0
           fi
@@ -672,7 +672,11 @@
           done
           __dnvr_need_state
           __dnvr_runner=$(__dnvr_pick_runner "$__dnvr_want") || exit 64
-          if [ -s "$__dnvr_record" ] && __dnvr_any_running; then
+          if [ -s "$__dnvr_record" ] && ${
+            if knownProcs == []
+            then "false"
+            else "__dnvr_any_running ${lib.concatMapStringsSep " " (n: ''"$DNVR_STATE"/runtime/${lib.escapeShellArg n}/pid'') knownProcs}"
+          }; then
             read -r __dnvr_previous < "$__dnvr_record" || true
             if [ "$__dnvr_previous" != "$__dnvr_runner" ]; then
               if [ -z "$__dnvr_want" ] && __dnvr_runner_exe "$__dnvr_previous" up >/dev/null; then
@@ -693,6 +697,15 @@
           "$__dnvr_exe"
           rm -f "$__dnvr_record"
           ;;
+      ${
+        if knownProcs == []
+        then ''
+          restart)
+            echo "dnvr restart: no processes configured" >&2
+            exit 1
+            ;;
+        ''
+        else ''
         restart)
           shift
           if [ "$#" -ne 1 ]; then
@@ -711,6 +724,8 @@
           __dnvr_exe=$(__dnvr_verb_exe restart) || exit 1
           exec "$__dnvr_exe" "$__dnvr_process" "$__dnvr_index"
           ;;
+        ''
+      }
         ps)
           printf '%-${toString psWidth}s %-8s %s\n' PROCESS PID STATUS
           ${psRows}

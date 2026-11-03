@@ -318,7 +318,7 @@ in
 
     # A live group is focused, with any process block the user closed
     # started again; a group with no surviving blocks is created afresh.
-    reattach = ''
+    reattach = lib.optionalString (processNames != []) ''
       ${prelude}
       if [ -f "$__rex_state" ]; then
         __live=$(__rex_blocks "$(__rex_get .session_id)" || true)
@@ -343,11 +343,10 @@ in
       fi
     '';
 
-    exec = ''
-      ${lib.optionalString (processNames == []) ''
-        echo "dnvr up: no processes configured" >&2
-        exit 0
-      ''}
+    exec =
+      if processNames == []
+      then ''echo "dnvr up: no processes configured" >&2''
+      else ''
       ${lib.optionalString (cfg.placement == "current-session") ''
         [ -n "''${REX_SESSION:-}" ] || {
           echo "dnvr up: runner_settings.rex.placement = \"current-session\" needs 'dnvr up' to run inside Rex" >&2
