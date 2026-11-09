@@ -27,16 +27,31 @@
       addressing_style = path
   '';
 
-  # Signed HEAD of the bucket: answers only once the key and bucket exist.
-  bucketProbe = ''curl -sf -o /dev/null -I --aws-sigv4 "aws:amz:${config.region}:s3" --user ${lib.escapeShellArg "${config.accessKey}:${config.secretKey}"} "http://${hostAddr}:''$${config.portEnv}/${config.bucket}"'';
+  buckets = lib.unique config.buckets;
+
+  garageCli = ''garage -c "$dir/garage.toml"'';
+
+  # Signed HEAD of a bucket: answers only once the key can use it.
+  bucketProbe = bucket: ''curl -sf -o /dev/null -I --aws-sigv4 "aws:amz:${config.region}:s3" --user ${lib.escapeShellArg "${config.accessKey}:${config.secretKey}"} "http://${hostAddr}:''$${config.portEnv}/${bucket}"'';
+
+  # Garage creates only the first bucket itself (`--default-bucket`); the
+  # rest go through the admin CLI, skipping ones a previous run created.
+  createBucket = bucket: ''
+    ${garageCli} bucket info ${bucket} >/dev/null 2>&1 \
+      || ${garageCli} bucket create ${bucket} >/dev/null
+    ${garageCli} bucket allow --read --write --owner ${bucket} --key ${lib.escapeShellArg config.accessKey} >/dev/null
+  '';
 in {
   options = {
-    bucket = mkOption {
-      type = types.strMatching "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]";
+    buckets = mkOption {
+      type = types.nonEmptyListOf (types.strMatching "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]");
+      example = ["uploads" "avatars"];
       description = ''
-        Bucket created at startup and readable/writable with `accessKey`.
-        Required. Published as `bucket` only once it accepts requests, so
-        `dnvr://<name>/bucket` doubles as a readiness signal.
+        Buckets created at startup, each readable and writable with
+        `accessKey`. Required. Each is published as `bucket.<bucket>` once it
+        accepts requests, and `buckets` (comma-separated) once all of them
+        do, so `dnvr://<name>/bucket.<bucket>` and `dnvr://<name>/buckets`
+        double as readiness signals.
       '';
     };
     package = mkOption {
@@ -125,7 +140,7 @@ in {
     # The endpoint is read live, so dynamic ports work and a stopped node
     # fails loudly instead of the CLI hanging on a dead port.
     scripts."${name}-aws" = {
-      description = "AWS CLI connected to the ${name} node (e.g. `${name}-aws s3 ls s3://${config.bucket}`)";
+      description = "AWS CLI connected to the ${name} node (e.g. `${name}-aws s3 ls s3://${lib.head buckets}`)";
       runtimeInputs = [pkgs.awscli2 dnvrState];
       text = ''
         endpoint=$(dnvr-state get ${name}.endpoint) || {
@@ -179,8 +194,8 @@ in {
               ${lib.optionalString (config.extraConfig != "") "printf '%s\\n' ${lib.escapeShellArg config.extraConfig}"}
             } > "$dir/garage.toml"
 
-            # Discovery keys, published before the server is ready; `bucket`
-            # (the readiness key) follows once it accepts requests.
+            # Discovery keys, published before the server is ready; the bucket
+            # keys (readiness) follow once each bucket accepts requests.
             dnvr-state set port "''$${config.portEnv}"
             dnvr-state set host "${hostAddr}"
             dnvr-state set endpoint "http://${hostAddr}:''$${config.portEnv}"
@@ -190,7 +205,7 @@ in {
 
             GARAGE_DEFAULT_ACCESS_KEY=${lib.escapeShellArg config.accessKey} \
             GARAGE_DEFAULT_SECRET_KEY=${lib.escapeShellArg config.secretKey} \
-            GARAGE_DEFAULT_BUCKET=${lib.escapeShellArg config.bucket} \
+            GARAGE_DEFAULT_BUCKET=${lib.escapeShellArg (lib.head buckets)} \
               garage -c "$dir/garage.toml" server --single-node --default-bucket &
             GARAGE_PID=$!
             trap '
@@ -200,12 +215,23 @@ in {
 
           ${presetLib.untilReady {
             pid = "$GARAGE_PID";
-            check = bucketProbe;
+            check = bucketProbe (lib.head buckets);
             onDead = "[${name}] garage exited before becoming ready";
             interval = "0.2";
           }}
-            dnvr-state set bucket ${lib.escapeShellArg config.bucket}
-            echo "[${name}] ready — bucket ${config.bucket} at http://${hostAddr}:''$${config.portEnv} (region ${config.region})"
+          ${lib.concatMapStrings createBucket (lib.tail buckets)}
+          ${lib.concatMapStrings (bucket: ''
+              ${presetLib.untilReady {
+                pid = "$GARAGE_PID";
+                check = bucketProbe bucket;
+                onDead = "[${name}] garage exited before bucket ${bucket} became ready";
+                interval = "0.2";
+              }}
+              dnvr-state set bucket.${bucket} ${bucket}
+            '')
+            buckets}
+            dnvr-state set buckets ${lib.escapeShellArg (lib.concatStringsSep "," buckets)}
+            echo "[${name}] ready — buckets ${lib.concatStringsSep ", " buckets} at http://${hostAddr}:''$${config.portEnv} (region ${config.region})"
 
             wait $GARAGE_PID
           '';

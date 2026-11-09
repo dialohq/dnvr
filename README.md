@@ -343,8 +343,8 @@ startup, then `database`, `url`, `socketUrl` once the server accepts
 connections and the databases exist. clickhouse: `httpPort`, `tcpPort`,
 `host`, `httpUrl`, `user` (and `postgresqlPort` when set) at startup, then
 `database` once the server answers queries. garage: `port`, `host`,
-`endpoint`, `region`, `accessKey`, `secretKey` at startup, then `bucket` once
-it accepts requests. The late keys are the ones to `dnvr://`-ref when you need
+`endpoint`, `region`, `accessKey`, `secretKey` at startup, then
+`bucket.<bucket>` as each bucket accepts requests and `buckets` once all do. The late keys are the ones to `dnvr://`-ref when you need
 readiness, not just discovery.
 
 A producer counts as alive while it holds its pid lock *and* the pid recorded
@@ -356,12 +356,13 @@ shows it as `exiting`, and the next launch stops it before starting.
 ### S3 with Garage
 
 The `garage` preset runs a single-node [Garage](https://garagehq.deuxfleurs.fr)
-S3 server with one bucket and one access key, both created at startup:
+S3 server with one access key and any number of buckets, all created at
+startup:
 
 ```nix
 processes.s3 = {
   imports = [presets.garage];
-  bucket = "uploads";           # required; also the readiness key
+  buckets = ["uploads" "avatars"];  # required; each is also a readiness key
   # port = 3900;                # null picks a free port at startup
   # accessKey / secretKey       # default: fixed per-process values
   # region = "garage";          # clients must sign with this region
@@ -369,12 +370,16 @@ processes.s3 = {
 
 processes.api.env = {
   S3_ENDPOINT = "dnvr://s3/endpoint";
-  S3_BUCKET = "dnvr://s3/bucket";
+  S3_BUCKET = "dnvr://s3/bucket.uploads";  # waits for that bucket only
   AWS_ACCESS_KEY_ID = "dnvr://s3/accessKey";
   AWS_SECRET_ACCESS_KEY = "dnvr://s3/secretKey";
   AWS_REGION = "dnvr://s3/region";
 };
 ```
+
+Use `dnvr://s3/buckets` (comma-separated) to wait for all of them. Buckets
+removed from the list are left in place with their data, but are no longer
+published.
 
 The default keys are derived from the process name, so they stay the same
 across runs and machines. They are dev credentials and end up in the Nix
