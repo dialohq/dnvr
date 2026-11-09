@@ -381,8 +381,17 @@ across runs and machines. They are dev credentials and end up in the Nix
 store. Garage requires an access key of at least 8 characters and a secret of
 at least 16. Clients must use path-style requests
 (`<endpoint>/<bucket>/<key>`) and sign with `region`; SDKs that default to
-`us-east-1` need it set. `dnvr <name>-garage` runs the garage CLI against the
-node (e.g. `dnvr s3-garage bucket list`). Garage implements a subset of S3;
+`us-east-1` need it set.
+
+The preset adds two commands to the devshell:
+
+- `<name>-aws` runs the AWS CLI against the running node, with the endpoint,
+  keys, region and path-style addressing already set. It ignores your
+  `~/.aws` profiles. For example: `s3-aws s3 ls s3://uploads`,
+  `s3-aws s3 cp ./file s3://uploads/`.
+- `<name>-garage` runs the garage admin CLI against the node, for example
+  `s3-garage bucket list` or `s3-garage key list`. It manages buckets and keys
+  but doesn't read or write objects. Garage implements a subset of S3;
 check its compatibility list if you rely on features like versioning or
 object lock.
 

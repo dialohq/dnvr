@@ -19,6 +19,14 @@
 
   configPath = "$DNVR_ROOT/${config.dataDir}/garage.toml";
 
+  # Replaces ~/.aws/config for `<name>-aws`: hostnames like localhost would
+  # otherwise get virtual-hosted bucket URLs, which Garage doesn't serve here.
+  awsConfig = pkgs.writeText "${name}-aws-config" ''
+    [default]
+    s3 =
+      addressing_style = path
+  '';
+
   # Signed HEAD of the bucket: answers only once the key and bucket exist.
   bucketProbe = ''curl -sf -o /dev/null -I --aws-sigv4 "aws:amz:${config.region}:s3" --user ${lib.escapeShellArg "${config.accessKey}:${config.secretKey}"} "http://${hostAddr}:''$${config.portEnv}/${config.bucket}"'';
 in {
@@ -112,6 +120,27 @@ in {
       description = "garage CLI for the ${name} node (buckets, keys, status)";
       runtimeInputs = [config.package];
       text = ''exec garage -c "${configPath}" "$@"'';
+    };
+
+    # The endpoint is read live, so dynamic ports work and a stopped node
+    # fails loudly instead of the CLI hanging on a dead port.
+    scripts."${name}-aws" = {
+      description = "AWS CLI connected to the ${name} node (e.g. `${name}-aws s3 ls s3://${config.bucket}`)";
+      runtimeInputs = [pkgs.awscli2 dnvrState];
+      text = ''
+        endpoint=$(dnvr-state get ${name}.endpoint) || {
+          echo "${name}-aws: ${name} is not running (start it with 'dnvr up')" >&2
+          exit 1
+        }
+        unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_SESSION_TOKEN
+        export AWS_ENDPOINT_URL="$endpoint" \
+          AWS_ACCESS_KEY_ID=${lib.escapeShellArg config.accessKey} \
+          AWS_SECRET_ACCESS_KEY=${lib.escapeShellArg config.secretKey} \
+          AWS_REGION=${lib.escapeShellArg config.region} \
+          AWS_CONFIG_FILE=${awsConfig} \
+          AWS_SHARED_CREDENTIALS_FILE=/dev/null
+        exec aws "$@"
+      '';
     };
 
     command =
