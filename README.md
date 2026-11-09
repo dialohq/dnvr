@@ -3,7 +3,7 @@
 Declarative dev environments for Nix flakes. Each **shell** is a Nix module
 declaring **processes** (long-running commands orchestrated by a runner —
 each one a module that can import a reusable **preset** like
-postgres/clickhouse), **scripts** (commands on the devshell PATH), and
+postgres/clickhouse/garage), **scripts** (commands on the devshell PATH), and
 **env** vars. dnvr turns every `dnvr.shells.<name>` into:
 
 - `devShells.<name>` — enter with `nix develop .#<name>`
@@ -270,7 +270,7 @@ every `dnvr.shells.<name>` submodule, its processes, and its scripts:
 
 | arg | what it is |
 |---|---|
-| `presets` | Built-in process presets (`postgres`, `clickhouse`) plus `dnvr.presets`. |
+| `presets` | Built-in process presets (`postgres`, `clickhouse`, `garage`) plus `dnvr.presets`. |
 | `runners` | The built-in runners (`tmux`, `rex`) plus `dnvr.extraRunners`. |
 | `mkScript` | `{name, text, runtimeInputs?, shell?} -> drv` script builder. |
 | `dnvrState` | The `dnvr-state` CLI package, for `runtimeInputs`. |
@@ -342,8 +342,49 @@ The built-in presets publish their full connection surface. postgres:
 startup, then `database`, `url`, `socketUrl` once the server accepts
 connections and the databases exist. clickhouse: `httpPort`, `tcpPort`,
 `host`, `httpUrl`, `user` (and `postgresqlPort` when set) at startup, then
-`database` once the server answers queries. The late keys are the ones to
-`dnvr://`-ref when you need readiness, not just discovery.
+`database` once the server answers queries. garage: `port`, `host`,
+`endpoint`, `region`, `accessKey`, `secretKey` at startup, then `bucket` once
+it accepts requests. The late keys are the ones to `dnvr://`-ref when you need
+readiness, not just discovery.
+
+A producer counts as alive while it holds its pid lock *and* the pid recorded
+in its pid file is running. Children inherit the lock, so a server that takes
+longer to stop than the runner waits (garage needs about a second) can
+briefly outlive its wrapper. Its keys are stale from that moment, `dnvr ps`
+shows it as `exiting`, and the next launch stops it before starting.
+
+### S3 with Garage
+
+The `garage` preset runs a single-node [Garage](https://garagehq.deuxfleurs.fr)
+S3 server with one bucket and one access key, both created at startup:
+
+```nix
+processes.s3 = {
+  imports = [presets.garage];
+  bucket = "uploads";           # required; also the readiness key
+  # port = 3900;                # null picks a free port at startup
+  # accessKey / secretKey       # default: fixed per-process values
+  # region = "garage";          # clients must sign with this region
+};
+
+processes.api.env = {
+  S3_ENDPOINT = "dnvr://s3/endpoint";
+  S3_BUCKET = "dnvr://s3/bucket";
+  AWS_ACCESS_KEY_ID = "dnvr://s3/accessKey";
+  AWS_SECRET_ACCESS_KEY = "dnvr://s3/secretKey";
+  AWS_REGION = "dnvr://s3/region";
+};
+```
+
+The default keys are derived from the process name, so they stay the same
+across runs and machines. They are dev credentials and end up in the Nix
+store. Garage requires an access key of at least 8 characters and a secret of
+at least 16. Clients must use path-style requests
+(`<endpoint>/<bucket>/<key>`) and sign with `region`; SDKs that default to
+`us-east-1` need it set. `dnvr <name>-garage` runs the garage CLI against the
+node (e.g. `dnvr s3-garage bucket list`). Garage implements a subset of S3;
+check its compatibility list if you rely on features like versioning or
+object lock.
 
 ### Static values and `$DNVR_ROOT`
 
@@ -354,7 +395,8 @@ tiers:
    off the config (`config.processes.db.port`).
 2. **Location-dependent** — paths under the repo root. Presets expose
    these as read-only computed options (`socketPath`, `dataPath`, `url`,
-   `socketUrl` on postgres; `httpUrl`, `dataPath` on clickhouse) whose
+   `socketUrl` on postgres; `httpUrl`, `dataPath` on clickhouse; `endpoint`,
+   `dataPath` on garage) whose
    values are `$DNVR_ROOT`-relative shell strings.
 3. **Runtime-published** — dynamically picked ports, readiness. This is
    `dnvr://` territory (next section) and the only tier that waits.
