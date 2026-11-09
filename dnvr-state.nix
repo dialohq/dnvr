@@ -44,6 +44,17 @@ pkgs.writeShellApplication {
       key="''${ref#*.}"
     }
 
+    # A producer is alive while it holds the exclusive flock on its pid file
+    # and the pid recorded there is running. The lock alone is not enough:
+    # children inherit it and can briefly outlive a killed wrapper.
+    producer_alive() {
+      local pid=
+      [ -f "$1" ] || return 1
+      flock -ns "$1" true 2>/dev/null && return 1
+      read -r pid < "$1" || true
+      [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    }
+
     cmd="''${1:-}"
     [ -z "$cmd" ] && usage
     shift || true
@@ -68,13 +79,11 @@ pkgs.writeShellApplication {
           exit 1
         fi
         # A key is stale if it is readable while its producer is not
-        # alive; the producer holds an exclusive flock on its pid file
-        # for life, so a free (or absent) lock is the staleness test.
-        # Launches wipe leftover keys BEFORE taking the pid lock
-        # (serialized by launch.lock), so a key readable under a held
-        # lock always belongs to the live incarnation.
+        # alive (see producer_alive). Launches wipe leftover keys BEFORE
+        # taking the pid lock (serialized by launch.lock), so a key
+        # readable while the producer lives belongs to that incarnation.
         pidfile="$RUNTIME/$svc/pid"
-        if [ ! -f "$pidfile" ] || flock -ns "$pidfile" true 2>/dev/null; then
+        if ! producer_alive "$pidfile"; then
           echo "dnvr-state: $1 is stale — '$svc' is not running (dump shows raw state)" >&2
           exit 1
         fi
@@ -106,8 +115,7 @@ pkgs.writeShellApplication {
         file="$RUNTIME/$svc/$key"
         pidfile="$RUNTIME/$svc/pid"
         live() {
-          [ -f "$pidfile" ] || return 1
-          flock -ns "$pidfile" true 2>/dev/null && return 1
+          producer_alive "$pidfile" || return 1
           value=$(cat "$file" 2>/dev/null)
         }
         started=$(date +%s)
