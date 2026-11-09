@@ -576,7 +576,8 @@
       # exclusive flock the process holds on its pid file for life — never
       # from the file's presence or the pid number, so recycled pids can't
       # lie. Files persist after exit (nothing cleans them; the next launch
-      # wipes them): unlocked file -> `exited`, no file -> `stopped`.
+      # wipes them): unlocked file -> `exited`, no file -> `stopped`. A lock
+      # held only by children of a dead process -> `exiting`.
       __dnvr_ps_row() {
         local pid="-" status="stopped"
         if [ -f "$2" ]; then
@@ -584,8 +585,10 @@
           [ -n "$pid" ] || pid="-"
           if flock -ns "$2" true 2>/dev/null; then
             status=exited
-          else
+          elif [ "$pid" != - ] && kill -0 "$pid" 2>/dev/null; then
             status=running
+          else
+            status=exiting
           fi
         fi
         printf '%-${toString psWidth}s %-8s %s\n' "$1" "$pid" "$status"
